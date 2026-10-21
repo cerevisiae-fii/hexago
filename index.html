@@ -108,7 +108,11 @@ canvas{display:block;touch-action:manipulation}
     </div>
     <div id="onlineBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-3 hidden text-xs">
       <div class="flex flex-col gap-1">
-        <span class="font-bold text-neutral-700">部屋を作る (ホスト=黒 / 2人の参加で開始):</span>
+        <span class="font-bold text-neutral-700">構成 (ホストが部屋作成前に選択):</span>
+        <div class="grid grid-cols-2 gap-2" id="onlineTypeBtns"><button data-v="hhh" class="opt">人人人 (3人)</button><button data-v="hha" class="opt">人人AI (朱席=AI)</button></div>
+      </div>
+      <div class="flex flex-col gap-1">
+        <span class="font-bold text-neutral-700">部屋を作る (ホスト=黒 / 参加者が揃うと開始):</span>
         <button id="btnCreate" class="py-2 bg-neutral-900 text-white font-bold rounded-lg hover:bg-neutral-800">ルーム作成</button>
       </div>
       <div class="border-t border-neutral-200 pt-2 flex flex-col gap-1.5">
@@ -181,11 +185,11 @@ function build(n) {
 
 // ===== 状態 =====
 let G, seenSet = new Set();
-let pendingSize = 9, mode = 'local', seats = [0, 'human', 'human', 'human'];
+let onlineAI = false, pendingSize = 9, mode = 'local', seats = [0, 'human', 'human', 'human'];
 let prev = -1, ptype = 'mouse', aiBusy = false;
 let peer = null, conns = [], hostConn = null, myRole = null, isHost = false, roomCode = null;
 
-function newG(n) { return { size: n, board: Array(P.length).fill(0), turn: 1, damage: [0, 0, 0, 0], passes: 0, over: false, result: null, phase: 'playing', dead: [], last: -1, out: [false, false, false, false], seen: [], hist: [] }; }
+function newG(n) { return { aiSeat: (mode === 'online' && onlineAI) ? 3 : 0, size: n, board: Array(P.length).fill(0), turn: 1, damage: [0, 0, 0, 0], passes: 0, over: false, result: null, phase: 'playing', dead: [], last: -1, out: [false, false, false, false], seen: [], hist: [] }; }
 function setSeen() { seenSet = new Set(G.seen); }
 function hash(a) { // cyrb53
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -196,14 +200,14 @@ function hash(a) { // cyrb53
 }
 const KEY = 'hexago-save-v1';
 function save() {
-  try { sessionStorage.setItem(KEY, JSON.stringify({ G, pendingSize, mode, seats, theme: theme.id, sound: snd.on })); } catch (e) { }
+  try { sessionStorage.setItem(KEY, JSON.stringify({ G, onlineAI, pendingSize, mode, seats, theme: theme.id, sound: snd.on })); } catch (e) { }
 }
 function load() {
   try {
     const s = JSON.parse(sessionStorage.getItem(KEY) || 'null');
     if (!s || !s.G || ![9, 13, 19].includes(s.G.size)) return false;
     build(s.G.size); if (s.G.board.length !== P.length) return false;
-    G = s.G; pendingSize = s.pendingSize || G.size; seats = s.seats || seats; mode = 'local';
+    G = s.G; onlineAI = !!s.onlineAI; G.aiSeat = 0; pendingSize = s.pendingSize || G.size; seats = s.seats || seats; mode = 'local';
     if (THEMES[s.theme]) theme = THEMES[s.theme]; if (s.sound === false) snd.on = false;
     setSeen(); return true;
   } catch (e) { return false; }
@@ -315,14 +319,15 @@ function aiChoose() {
   if (best === null || bs < 0 || (G.passes > 0 && bs < 15)) return -1;
   return best;
 }
+const aiSeatOf = p => mode === 'online' ? G.aiSeat === p : seats[p] === 'ai';
 function maybeAI() {
-  if (mode !== 'local' || G.over || aiBusy) return;
-  if (G.phase === 'dead') { if (seats.slice(1).every(s => s === 'ai')) { finishScore(); after(); } return; }
-  if (seats[G.turn] !== 'ai') return;
+  if (G.over || aiBusy || (mode === 'online' && !isHost)) return;
+  if (G.phase === 'dead') { if (mode === 'local' && seats.slice(1).every(s => s === 'ai')) { finishScore(); after(); } return; }
+  if (!aiSeatOf(G.turn)) return;
   aiBusy = true; $('aiOv').classList.remove('hidden');
   setTimeout(() => {
     aiBusy = false; $('aiOv').classList.add('hidden');
-    if (G.over || G.phase !== 'playing' || seats[G.turn] !== 'ai') return;
+    if (G.over || G.phase !== 'playing' || !aiSeatOf(G.turn)) return;
     const m = aiChoose(); if (m < 0 || !play(m)) doPass();
     after();
   }, 450 + Math.random() * 300);
@@ -400,13 +405,13 @@ function render() {
 function canUndo() {
   if (G.over || G.phase !== 'playing' || !G.hist.length || aiBusy) return false;
   const top = G.hist[G.hist.length - 1];
-  if (mode === 'online') return top.by === myRole;
+  if (mode === 'online') { let k = G.hist.length - 1; while (k >= 0 && aiSeatOf(G.hist[k].by)) k--; return k >= 0 && G.hist[k].by === myRole; }
   return seats[G.turn] === 'human' || seats.slice(1).includes('human');
 }
 function undo() {
   if (!canUndo()) return;
   let s = G.hist.pop();
-  if (mode === 'local') while (seats[s.by] === 'ai' && G.hist.length) s = G.hist.pop();
+  while (aiSeatOf(s.by) && G.hist.length) s = G.hist.pop();
   G.board = s.board; G.damage = s.damage; G.turn = s.turn; G.passes = s.passes; G.last = s.last; G.out = s.out; G.seen.length = s.seen; setSeen(); prev = -1;
   after();
 }
@@ -414,9 +419,10 @@ function after() { updateUI(); save(); sync(); maybeAI(); }
 function dotHtml(p) { return `<span class="dot" style="background:${theme.fill[p]};border-color:${theme.stroke[p]}"></span>`; }
 function updateUI() {
   const t = G.turn;
-  $('turnInd').innerHTML = `${dotHtml(t)}${NAMES[t]} (${t}P)${mode === 'local' && seats[t] === 'ai' ? ' AI' : ''}${mode === 'online' && t === myRole ? ' ★あなた' : ''}`;
+  $('turnInd').innerHTML = `${dotHtml(t)}${NAMES[t]} (${t}P)${aiSeatOf(t) ? ' AI' : ''}${mode === 'online' && t === myRole ? ' ★あなた' : ''}`;
   $('dmg').innerHTML = [1, 2, 3].map(p => `<span>${dotHtml(p)}${NAMES[p]} <strong>${G.damage[p]}</strong>${G.out[p] ? '(投)' : ''}</span>`).join('');
-  $('modeBadge').textContent = mode === 'online' ? `オンライン (${myRole ? NAMES[myRole] : '-'})` : 'ローカル ' + seats.slice(1).map(s => s === 'ai' ? 'AI' : '人').join('');
+  $('modeBadge').textContent = mode === 'online' ? `オンライン${G.aiSeat ? ' 人人AI' : ' 人人人'} (${myRole ? NAMES[myRole] : '-'})` : 'ローカル ' + seats.slice(1).map(s => s === 'ai' ? 'AI' : '人').join('');
+  if (mode === 'online' && !isHost) $('aiOv').classList.toggle('hidden', !(G.aiSeat && G.turn === G.aiSeat && !G.over && G.phase === 'playing'));
   $('btnUndo').disabled = !canUndo();
   $('bnDead').classList.toggle('hidden', G.phase !== 'dead');
   $('bnResult').classList.toggle('hidden', !G.over);
@@ -441,6 +447,7 @@ function syncSettings() {
   $('seatBox').classList.toggle('hidden', mode !== 'local'); $('onlineBox').classList.toggle('hidden', mode !== 'online');
   $('seatBtns').innerHTML = '';
   [1, 2, 3].forEach(p => { const b = document.createElement('button'); b.className = 'opt' + (seats[p] === 'ai' ? ' on' : ''); b.innerHTML = `${dotHtml(p)}${NAMES[p]}: ${seats[p] === 'ai' ? 'AI' : '人'}`; b.onclick = () => { snd.click(); seats[p] = seats[p] === 'ai' ? 'human' : 'ai'; syncSettings(); save(); }; $('seatBtns').appendChild(b); });
+  document.querySelectorAll('#onlineTypeBtns .opt').forEach(b => b.classList.toggle('on', (b.dataset.v === 'hha') === onlineAI));
   $('btnSound').textContent = snd.on ? 'ON' : 'OFF'; $('btnSound').classList.toggle('on', snd.on);
 }
 document.querySelectorAll('#sizeBtns .opt').forEach(b => b.onclick = () => { snd.click(); pendingSize = +b.dataset.v; syncSettings(); save(); });
@@ -448,6 +455,7 @@ document.querySelectorAll('#modeBtns .opt').forEach(b => b.onclick = () => {
   snd.click(); if (mode === 'online' && b.dataset.v !== 'online') { closePeer(); $('roomSt').textContent = ''; }
   mode = b.dataset.v; syncSettings(); updateUI();
 });
+document.querySelectorAll('#onlineTypeBtns .opt').forEach(b => b.onclick = () => { snd.click(); onlineAI = b.dataset.v === 'hha'; syncSettings(); save(); });
 document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { snd.click(); seats = [0, ...[...b.dataset.p].map(c => c === 'h' ? 'human' : 'ai')]; syncSettings(); save(); });
 $('btnSound').onclick = () => { snd.on = !snd.on; syncSettings(); snd.click(); save(); };
 $('btnOpenSettings').onclick = () => { snd.click(); syncSettings(); $('setModal').classList.remove('hidden'); };
@@ -497,7 +505,7 @@ function recv(data, from) {
   if (G.over && !wasOver && G.result) showResult();
   if (!G.over) $('resModal').classList.add('hidden');
   updateUI(); save();
-  if (isHost) sync(from);
+  if (isHost) { sync(from); maybeAI(); }
 }
 function wire(c) {
   c.on('data', d => recv(d, c));
@@ -509,13 +517,13 @@ $('btnCreate').onclick = () => {
   peer = new Peer(PFX + code.toLowerCase(), { debug: 0 });
   peer.on('open', () => {
     isHost = true; myRole = 1; roomCode = code; $('roomIn').value = code;
-    $('roomSt').textContent = `ルームID: ${code} (参加者 0/2)`;
+    $('roomSt').textContent = `ルームID: ${code} (参加者 0/${onlineAI ? 1 : 2})`;
     peer.on('connection', c => {
-      if (conns.length >= 2) { c.close(); return; }
+      if (conns.length >= (onlineAI ? 1 : 2)) { c.close(); return; }
       conns.push(c); wire(c);
       c.on('open', () => {
         c.send({ t: 'role', role: conns.length + 1 });
-        $('roomSt').textContent = `ルームID: ${code} (参加者 ${conns.length}/2)`;
+        $('roomSt').textContent = `ルームID: ${code} (参加者 ${conns.length}/${onlineAI ? 1 : 2})`;
         build(pendingSize); G = newG(pendingSize); setSeen(); prev = -1; $('resModal').classList.add('hidden'); updateUI(); save(); sync();
       });
     });

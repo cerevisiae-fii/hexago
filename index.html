@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ダイヤモンド碁</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+body{touch-action:manipulation;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Sans",sans-serif;background:var(--bg);color:var(--tx);transition:background .3s,color .3s}
+canvas{display:block;touch-action:manipulation}
+.card{background:var(--card);border:1px solid var(--bd)}
+.btn{background:var(--card);border:1px solid var(--bd)}
+.opt{border:1px solid #d4d4d4;border-radius:8px;padding:8px 4px;font-weight:700;font-size:13px}
+.opt.on{background:#171717;color:#fff}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;border:1.5px solid;vertical-align:-1px;margin-right:3px}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:rgba(150,150,150,.3);border-radius:3px}
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-between p-3 sm:p-6 select-none">
+<div class="w-full max-w-xl flex flex-col items-center gap-4 sm:gap-5">
+  <header class="w-full flex items-center justify-between pt-1">
+    <div class="w-8"></div>
+    <h1 class="text-2xl sm:text-3xl font-extrabold tracking-wider text-center">ダイヤモンド碁</h1>
+    <button id="btnOpenSettings" title="設定" class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-black/5 active:scale-95 transition-all">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+    </button>
+  </header>
+
+  <div class="card w-full p-3.5 sm:p-4 rounded-xl flex flex-col gap-3 text-sm sm:text-base">
+    <div class="flex items-center justify-between font-medium">
+      <div class="flex items-center gap-2"><span class="opacity-70">手番:</span><span id="turnInd" class="font-bold underline decoration-2 underline-offset-4"></span></div>
+      <div id="modeBadge" class="text-xs px-2.5 py-1 rounded-full font-semibold border opacity-80"></div>
+    </div>
+    <div class="flex items-center justify-between text-xs sm:text-sm pt-1 border-t border-current/10">
+      <div class="flex gap-3 flex-wrap"><span class="opacity-70">アゲハマ(ダメージ):</span><span id="dmg" class="flex gap-3"></span></div>
+      <div class="flex items-center gap-1.5"><span class="opacity-70">コミ:</span><span class="font-bold">なし</span></div>
+    </div>
+  </div>
+
+  <div class="w-full flex justify-center items-center relative">
+    <canvas id="cv" class="w-full aspect-square cursor-pointer max-w-[520px] rounded-lg"></canvas>
+    <div id="aiOv" class="absolute inset-0 bg-black/20 rounded-lg flex items-center justify-center hidden pointer-events-none">
+      <div class="bg-white/90 text-neutral-900 px-4 py-2 rounded-full shadow-lg font-bold text-sm flex items-center gap-2"><div class="w-3.5 h-3.5 border-2 border-neutral-900 border-t-transparent rounded-full animate-spin"></div>AI 思考中...</div>
+    </div>
+  </div>
+
+  <div class="w-full flex justify-between items-center gap-3">
+    <button id="btnUndo" class="btn flex-1 py-2.5 px-4 text-xs sm:text-sm font-bold rounded-xl hover:opacity-80 active:scale-95 transition-all shadow-sm disabled:opacity-40">1手戻る</button>
+    <button id="btnPass" class="btn flex-1 py-2.5 px-4 text-xs sm:text-sm font-bold rounded-xl hover:opacity-80 active:scale-95 transition-all shadow-sm">パス</button>
+    <button id="btnResign" class="flex-1 py-2.5 px-4 text-xs sm:text-sm font-bold border border-red-500/50 text-red-600 rounded-xl hover:bg-red-500/10 active:scale-95 transition-all shadow-sm">投了</button>
+  </div>
+
+  <div id="bnDead" class="hidden w-full flex flex-col gap-2 p-3 bg-amber-50 text-amber-900 text-xs sm:text-sm rounded-xl border border-amber-200 shadow-sm">
+    <div class="flex items-center justify-between font-bold"><span>⚠️ 死に石選択フェーズ</span><span class="text-xs opacity-75">死に石をタップして指定</span></div>
+    <p class="text-xs text-amber-800/90 leading-relaxed">地の中に残った死に石をタップしてマーキングしてください(死に石は持ち主のダメージになります)。完了したら「確定して集計」を押します。</p>
+    <div class="flex gap-2 pt-1">
+      <button id="btnDeadCancel" class="flex-1 py-1.5 px-3 bg-white border border-amber-300 font-bold rounded-lg hover:bg-amber-100 text-amber-900">対局再開</button>
+      <button id="btnDeadOk" class="flex-1 py-1.5 px-3 bg-amber-900 text-white font-bold rounded-lg hover:bg-amber-800">確定して集計</button>
+    </div>
+  </div>
+
+  <div id="bnResult" class="hidden w-full flex items-center justify-between py-2 px-3 bg-neutral-100 text-xs sm:text-sm rounded-lg text-neutral-800 border border-neutral-200">
+    <span class="font-medium">対局終了</span><button id="btnShowResult" class="font-bold underline hover:opacity-70">結果を見る</button>
+  </div>
+
+  <p class="text-xs opacity-60 text-center leading-relaxed">PC: 交点のホバーでプレビュー・クリックで打つ / スマホ: 1タップ目プレビュー、同じ交点を2タップ目で確定<br>石は6方向の空点(呼吸点)がすべて無くなると取られます</p>
+</div>
+<div></div>
+
+<!-- undo modal -->
+<div id="undoModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+  <div class="bg-white text-neutral-900 p-6 max-w-sm w-full text-center flex flex-col gap-5 rounded-2xl shadow-2xl border border-neutral-200">
+    <h2 class="text-xl font-extrabold">1手戻りますか？</h2>
+    <p class="text-sm text-neutral-600">直前の着手(またはパス)を取り消します。</p>
+    <div class="flex flex-col gap-2">
+      <button id="btnUndoOk" class="w-full py-2.5 bg-neutral-900 hover:bg-neutral-800 text-white text-sm font-bold rounded-xl">1手戻る</button>
+      <button id="btnUndoNo" class="w-full py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-sm font-bold rounded-xl">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- settings modal -->
+<div id="setModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+  <div class="bg-white text-neutral-900 p-5 sm:p-6 max-w-md w-full rounded-2xl shadow-2xl flex flex-col gap-5 border border-neutral-200 max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between border-b pb-3 border-neutral-200">
+      <h2 class="text-xl font-bold">ゲーム設定</h2>
+      <button id="btnCloseSettings" class="text-neutral-400 hover:text-neutral-800 text-xl font-bold px-2">✕</button>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">盤面サイズ (1方向の路数)</label>
+      <div class="grid grid-cols-3 gap-2" id="sizeBtns">
+        <button data-v="9" class="opt">9路盤</button><button data-v="13" class="opt">13路盤</button><button data-v="19" class="opt">19路盤</button>
+      </div>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">対戦モード</label>
+      <div class="grid grid-cols-2 gap-2" id="modeBtns">
+        <button data-v="local" class="opt">ローカル (人 / AI)</button><button data-v="online" class="opt">オンライン (3人)</button>
+      </div>
+    </div>
+    <div id="seatBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-2">
+      <span class="text-xs font-bold text-neutral-600">各席のプレイヤー (タップで 人 / AI 切替):</span>
+      <div class="grid grid-cols-3 gap-2" id="seatBtns"></div>
+      <div class="grid grid-cols-3 gap-2 text-xs">
+        <button data-p="hhh" class="opt">人人人</button><button data-p="hha" class="opt">人人AI</button><button data-p="haa" class="opt">人AIAI</button>
+      </div>
+    </div>
+    <div id="onlineBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-3 hidden text-xs">
+      <div class="flex flex-col gap-1">
+        <span class="font-bold text-neutral-700">部屋を作る (ホスト=黒 / 2人の参加で開始):</span>
+        <button id="btnCreate" class="py-2 bg-neutral-900 text-white font-bold rounded-lg hover:bg-neutral-800">ルーム作成</button>
+      </div>
+      <div class="border-t border-neutral-200 pt-2 flex flex-col gap-1.5">
+        <span class="font-bold text-neutral-700">部屋に入る (ゲスト: 先に入った順に白・3色目):</span>
+        <div class="flex gap-2">
+          <input id="roomIn" maxlength="5" placeholder="5桁のルームID" class="flex-1 px-3 py-1.5 border border-neutral-300 rounded-lg text-center font-mono text-sm uppercase focus:outline-none focus:border-neutral-900">
+          <button id="btnJoin" class="px-4 py-1.5 bg-neutral-800 text-white font-bold rounded-lg hover:bg-neutral-700">参加</button>
+        </div>
+      </div>
+      <div id="roomSt" class="text-center font-bold text-neutral-600 pt-1"></div>
+    </div>
+    <div class="flex items-center justify-between pt-1">
+      <span class="text-sm font-bold text-neutral-700">効果音 (SE)</span>
+      <button id="btnSound" class="px-3 py-1 text-xs font-bold rounded-full border border-neutral-300 bg-neutral-100">ON</button>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">カラーテーマ</label>
+      <div class="grid grid-cols-1 gap-1.5" id="themeList"></div>
+    </div>
+    <button id="btnNew" class="w-full py-3 bg-neutral-900 text-white font-bold text-sm tracking-wider rounded-xl hover:bg-neutral-800 mt-2">ニューゲームスタート</button>
+  </div>
+</div>
+
+<!-- result modal -->
+<div id="resModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+  <div class="bg-white text-neutral-900 p-6 sm:p-8 max-w-sm w-full text-center flex flex-col gap-5 rounded-2xl shadow-2xl border border-neutral-200">
+    <h2 id="resTitle" class="text-2xl font-extrabold">対局終了</h2>
+    <div id="resDet" class="text-sm text-neutral-700 flex flex-col gap-2 py-3 border-y border-neutral-200 font-medium"></div>
+    <div class="flex flex-col gap-2">
+      <button id="btnViewBoard" class="w-full py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-sm font-bold rounded-xl">盤面を確認する</button>
+      <button id="btnAgain" class="w-full py-2.5 bg-neutral-900 hover:bg-neutral-800 text-white text-sm font-bold rounded-xl">もう一度遊ぶ</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== テーマ (石色: 黒 / 白 / 朱) =====
+const NAMES = ['', '黒', '白', '朱'];
+const mk = (id, name, bg, tx, board, line, card, bd, c1, s1, c2, s2, c3, s3, n3) => ({ id, name, n3, bg, tx, board, line, card, bd, fill: [0, c1, c2, c3], stroke: [0, s1, s2, s3] });
+const THEMES = {
+  default: mk('default', '黒 / 白 / 朱 (標準)', '#ffffff', '#171717', '#ffffff', '#171717', '#fafafa', '#e5e5e5', '#171717', '#000', '#ffffff', '#171717', '#e4471f', '#7c1d0a', '朱'),
+  dark: mk('dark', '黒 / 白 / 縹 (ダーク)', '#0a0a0a', '#f5f5f5', '#0f0f0f', '#525252', '#171717', '#262626', '#262626', '#e5e5e5', '#f5f5f5', '#171717', '#3f74b4', '#c3dcf5', '縹'),
+  go: mk('go', 'ベージュ / 濃い茶色 / 深緑 (伝統碁盤)', '#f4e4bc', '#3e2211', '#e8c88b', '#3e2211', '#ebd19d', '#cbb07a', '#1c1917', '#000', '#fef3c7', '#78350f', '#2f8a5a', '#14452c', '深緑'),
+  cyber: mk('cyber', '紺 / 水色 / 黄金 (ネイビー)', '#020617', '#e0f2fe', '#0f172a', '#0284c7', '#0f172a', '#1e293b', '#1e293b', '#38bdf8', '#38bdf8', '#0284c7', '#f2b01e', '#6b3d08', '黄金'),
+  fancy: mk('fancy', 'ピンク / 濃い赤紫 / 紫 (ファンシー)', '#fdf4ff', '#4a044e', '#fbcfe8', '#831843', '#fae8ff', '#f5d0fe', '#831843', '#500724', '#fff1f2', '#9f1239', '#7e3fb8', '#3b1466', '紫')
+};
+let theme = THEMES.default;
+
+// ===== サウンド =====
+const snd = {
+  ctx: null, on: true,
+  init() { if (!this.ctx) { const A = window.AudioContext || window.webkitAudioContext; if (A) this.ctx = new A(); } if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
+  tone(fs, dur, type, vol, gap) {
+    if (!this.on) return; this.init(); if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    fs.forEach((f, k) => { const o = this.ctx.createOscillator(), g = this.ctx.createGain(); o.type = type; o.frequency.value = f; const t = t0 + k * gap; g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.01, t + dur); o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t + dur); });
+  },
+  place() { this.tone([220], .09, 'triangle', .35, 0); }, cap() { this.tone([523, 659, 784], .12, 'sine', .2, .05); },
+  click() { this.tone([600], .04, 'sine', .1, 0); }, win() { this.tone([523, 659, 784, 1046], .3, 'triangle', .25, .1); }
+};
+
+// ===== 盤ジオメトリ (六角形・軸座標) =====
+const DIRS = [[1, 0], [0, 1], [-1, 1], [-1, 0], [0, -1], [1, -1]];
+let SIDE = 5, P = [], M = {}, NB = [];
+function build(n) {
+  SIDE = (n + 1) / 2; P = []; M = {};
+  for (let r = -(SIDE - 1); r < SIDE; r++) for (let q = -(SIDE - 1); q < SIDE; q++) if (Math.abs(q + r) <= SIDE - 1) { M[q + ',' + r] = P.length; P.push([q, r]); }
+  NB = P.map(([q, r]) => DIRS.map(([a, b]) => M[(q + a) + ',' + (r + b)]).filter(v => v !== undefined));
+}
+
+// ===== 状態 =====
+let G, seenSet = new Set();
+let pendingSize = 9, mode = 'local', seats = [0, 'human', 'human', 'human'];
+let prev = -1, ptype = 'mouse', aiBusy = false;
+let peer = null, conns = [], hostConn = null, myRole = null, isHost = false, roomCode = null;
+
+function newG(n) { return { size: n, board: Array(P.length).fill(0), turn: 1, damage: [0, 0, 0, 0], passes: 0, over: false, result: null, phase: 'playing', dead: [], last: -1, out: [false, false, false, false], seen: [], hist: [] }; }
+function setSeen() { seenSet = new Set(G.seen); }
+function hash(a) { // cyrb53
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < a.length; i++) { h1 = Math.imul(h1 ^ a[i], 2654435761); h2 = Math.imul(h2 ^ a[i], 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+const KEY = 'diamondgo-save-v1';
+function save() {
+  try { sessionStorage.setItem(KEY, JSON.stringify({ G, pendingSize, mode, seats, theme: theme.id, sound: snd.on })); } catch (e) { }
+}
+function load() {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+    if (!s || !s.G || ![9, 13, 19].includes(s.G.size)) return false;
+    build(s.G.size); if (s.G.board.length !== P.length) return false;
+    G = s.G; pendingSize = s.pendingSize || G.size; seats = s.seats || seats; mode = 'local';
+    if (THEMES[s.theme]) theme = THEMES[s.theme]; if (s.sound === false) snd.on = false;
+    setSeen(); return true;
+  } catch (e) { return false; }
+}
+
+// ===== ルール =====
+function group(b, i) {
+  const c = b[i], seen = new Set([i]), q = [i];
+  while (q.length) { const x = q.pop(); for (const n of NB[x]) if (b[n] === c && !seen.has(n)) { seen.add(n); q.push(n); } }
+  return [...seen];
+}
+const libCount = (b, g) => { const s = new Set(); g.forEach(x => NB[x].forEach(n => { if (!b[n]) s.add(n); })); return s.size; };
+// 着手シミュレーション: 違法なら null
+function sim(b, i, p) {
+  if (b[i]) return null;
+  const a = b.slice(); a[i] = p; const cap = [], done = new Set();
+  for (const n of NB[i]) if (a[n] && a[n] !== p && !done.has(n)) {
+    const g = group(a, n); g.forEach(x => done.add(x));
+    if (!libCount(a, g)) cap.push(...g);
+  }
+  cap.forEach(x => a[x] = 0);
+  if (!libCount(a, group(a, i))) return null; // 自殺手
+  if (cap.length && seenSet.has(hash(a))) return null; // コウ(同一局面の再現)
+  return { a, cap };
+}
+function activeCount() { return [1, 2, 3].filter(p => !G.out[p]).length; }
+function nextTurn() { let t = G.turn; do { t = t % 3 + 1; } while (G.out[t]); G.turn = t; }
+function snap(by) {
+  G.hist.push({ by, board: G.board.slice(), damage: G.damage.slice(), turn: G.turn, passes: G.passes, last: G.last, out: G.out.slice(), seen: G.seen.length });
+  if (G.hist.length > 40) G.hist.shift();
+}
+function play(i) {
+  const p = G.turn, r = sim(G.board, i, p); if (!r) return false;
+  snap(p); r.cap.forEach(x => G.damage[G.board[x]]++);
+  G.board = r.a; G.last = i; G.passes = 0;
+  const h = hash(G.board); G.seen.push(h); seenSet.add(h);
+  r.cap.length ? snd.cap() : snd.place(); nextTurn(); return true;
+}
+function doPass() {
+  snd.click(); snap(G.turn); G.passes++; G.last = -1;
+  if (G.passes >= activeCount()) { G.phase = 'dead'; prev = -1; } else nextTurn();
+}
+function territory() {
+  const t = [0, 0, 0, 0], vis = new Set();
+  for (let i = 0; i < P.length; i++) if (!G.board[i] && !vis.has(i)) {
+    const reg = [i], cols = new Set(); vis.add(i);
+    for (let k = 0; k < reg.length; k++) for (const n of NB[reg[k]]) { if (!G.board[n]) { if (!vis.has(n)) { vis.add(n); reg.push(n); } } else cols.add(G.board[n]); }
+    if (cols.size === 1) t[[...cols][0]] += reg.length;
+  }
+  return t;
+}
+function finishScore() {
+  G.dead.forEach(i => { if (G.board[i]) { G.damage[G.board[i]]++; G.board[i] = 0; } });
+  G.dead = []; G.phase = 'ended'; G.over = true;
+  const t = territory(), sc = [0, 1, 2, 3].map(p => t[p] - G.damage[p]);
+  const rank = [1, 2, 3].filter(p => !G.out[p]).sort((a, b) => sc[b] - sc[a]);
+  const top = rank.filter(p => sc[p] === sc[rank[0]]);
+  const title = top.length > 1 ? `引き分け (${top.map(p => NAMES[p]).join('・')} ${sc[rank[0]]}点)` : `${NAMES[rank[0]]}の勝ち (${sc[rank[0]]}点)`;
+  const row = p => `<div class="flex justify-between items-center"><span><span class="dot" style="background:${theme.fill[p]};border-color:${theme.stroke[p]}"></span>${NAMES[p]}${G.out[p] ? ' (投了)' : ''}</span><span>地 ${t[p]} − アゲハマ ${G.damage[p]} = <strong>${sc[p]}</strong></span></div>`;
+  G.result = { title, details: [1, 2, 3].map(row).join('') };
+  snd.win(); showResult();
+}
+function resign() {
+  const p = G.turn; G.out[p] = true; snd.click();
+  if (activeCount() <= 1) {
+    const w = [1, 2, 3].find(x => !G.out[x]); G.over = true;
+    G.result = { title: `${NAMES[w]}の勝ち`, details: `${NAMES[p]} が投了し、残りは ${NAMES[w]} のみとなりました。` };
+    snd.win(); showResult();
+  } else { G.passes = 0; nextTurn(); }
+}
+
+// ===== AI =====
+function regionInfo(b) {
+  const id = Array(P.length).fill(-1), regs = [];
+  for (let i = 0; i < P.length; i++) if (!b[i] && id[i] < 0) {
+    const reg = [i], cols = new Set(), bs = new Set(); id[i] = regs.length;
+    for (let k = 0; k < reg.length; k++) for (const n of NB[reg[k]]) { if (!b[n]) { if (id[n] < 0) { id[n] = regs.length; reg.push(n); } } else { cols.add(b[n]); bs.add(n); } }
+    regs.push({ size: reg.length, cols, b: bs.size });
+  }
+  return { id, regs };
+}
+// 空き領域ごとの基本価値: 自陣(囲われた地)は大きく減点、相手の地への侵入も減点、ダメ(小さい境界)はほぼ無価値
+function regionBase(r, p) {
+  if (r.cols.size === 1 && r.size <= 2.5 * r.b + 2) return r.cols.has(p) ? -200 : -80;
+  if (r.cols.size >= 2 && r.size <= 3) return -5;
+  return 25;
+}
+function aiChoose() {
+  const b = G.board, p = G.turn, c = SIDE - 1, { id, regs } = regionInfo(b); let best = null, bs = -1e9;
+  for (let i = 0; i < P.length; i++) {
+    const r = sim(b, i, p); if (!r) continue;
+    const base = regionBase(regs[id[i]], p);
+    let s = base + r.cap.length * 100;
+    const l = libCount(r.a, group(r.a, i));
+    if (l <= 1) s -= 150; else if (l === 2) s -= 15;
+    // 自分のアタリの石を救う
+    for (const n of NB[i]) if (b[n] === p && libCount(b, group(b, n)) <= 1 && l >= 2) { s += 60; break; }
+    // 相手の石を追い詰める
+    const done = new Set();
+    for (const n of NB[i]) if (b[n] && b[n] !== p && !done.has(n)) { const g = group(b, n); g.forEach(x => done.add(x)); const ll = libCount(b, g); if (ll <= 2) s += 45 / ll; }
+    if (base > 0) { // 打つ価値のある場所のみ、形・中央寄りを加点
+      s += Math.min(l, 6) * 3 + NB[i].filter(n => b[n] === p).length * 2;
+      const [q, rr] = P[i]; s -= (Math.abs(q) + Math.abs(rr) + Math.abs(q + rr)) / 2 / c * 6;
+    }
+    s += Math.random() * 4;
+    if (s > bs) { bs = s; best = i; }
+  }
+  // 価値のある手がなければパス (他者がパスしているときは基準を緩める)
+  if (best === null || bs < 0 || (G.passes > 0 && bs < 15)) return -1;
+  return best;
+}
+function maybeAI() {
+  if (mode !== 'local' || G.over || aiBusy) return;
+  if (G.phase === 'dead') { if (seats.slice(1).every(s => s === 'ai')) { finishScore(); after(); } return; }
+  if (seats[G.turn] !== 'ai') return;
+  aiBusy = true; $('aiOv').classList.remove('hidden');
+  setTimeout(() => {
+    aiBusy = false; $('aiOv').classList.add('hidden');
+    if (G.over || G.phase !== 'playing' || seats[G.turn] !== 'ai') return;
+    const m = aiChoose(); if (m < 0 || !play(m)) doPass();
+    after();
+  }, 450 + Math.random() * 300);
+}
+
+// ===== 入力 =====
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+function mine() { return mode === 'online' ? G.turn === myRole : seats[G.turn] === 'human'; }
+function metrics() {
+  const w = cv.getBoundingClientRect().width, pad = w * 0.07, cell = (w - pad * 2) / (2 * (SIDE - 1));
+  return { w, cell, pos: i => [w / 2 + cell * (P[i][0] + P[i][1] / 2), w / 2 + cell * P[i][1] * 0.866] };
+}
+function hit(e) {
+  const { w, cell, pos } = metrics(), rc = cv.getBoundingClientRect();
+  const x = e.clientX - rc.left, y = e.clientY - rc.top; let bi = -1, bd = cell * 0.65;
+  for (let i = 0; i < P.length; i++) { const [px, py] = pos(i), d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; bi = i; } }
+  return bi;
+}
+cv.addEventListener('pointerdown', e => ptype = e.pointerType || 'mouse');
+cv.addEventListener('pointermove', e => ptype = e.pointerType || 'mouse');
+cv.addEventListener('mousemove', e => {
+  if (ptype === 'touch' || G.over || G.phase !== 'playing' || !mine()) return;
+  const i = hit(e); if (i !== prev) { prev = i; render(); }
+});
+cv.addEventListener('mouseleave', () => { if (ptype === 'touch') return; prev = -1; render(); });
+cv.addEventListener('click', e => {
+  snd.init(); if (G.over) return;
+  const i = hit(e); if (i < 0) return;
+  if (G.phase === 'dead') {
+    if (G.board[i]) { const g = group(G.board, i), isD = G.dead.includes(i); G.dead = isD ? G.dead.filter(x => !g.includes(x)) : [...new Set([...G.dead, ...g])]; snd.click(); render(); save(); sync(); }
+    return;
+  }
+  if (!mine() || G.phase !== 'playing') return;
+  if (ptype !== 'touch' || prev === i) { if (play(i)) { prev = -1; after(); } else if (ptype === 'touch') render(); }
+  else { prev = i; render(); }
+});
+
+// ===== 描画 =====
+function resizeCanvas() {
+  const rc = cv.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  cv.width = rc.width * d; cv.height = rc.height * d; ctx.setTransform(d, 0, 0, d, 0, 0); render();
+}
+window.addEventListener('resize', resizeCanvas);
+function stone(x, y, r, p, alpha) {
+  ctx.save(); ctx.globalAlpha = alpha; ctx.beginPath(); ctx.arc(x, y, r, 0, 7);
+  ctx.fillStyle = theme.fill[p]; ctx.fill(); ctx.strokeStyle = theme.stroke[p]; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+}
+function render() {
+  const { w, cell, pos } = metrics(), s = SIDE - 1, r0 = cell * 0.44;
+  ctx.fillStyle = theme.board; ctx.fillRect(0, 0, w, w);
+  ctx.strokeStyle = theme.line; ctx.lineWidth = 1; ctx.beginPath();
+  for (let i = 0; i < P.length; i++) { const [x, y] = pos(i); for (const d of [0, 1, 2]) { const n = NB[i].find(k => P[k][0] === P[i][0] + DIRS[d][0] && P[k][1] === P[i][1] + DIRS[d][1]); if (n !== undefined) { const [x2, y2] = pos(n); ctx.moveTo(x, y); ctx.lineTo(x2, y2); } } }
+  ctx.stroke();
+  ctx.lineWidth = 2; ctx.beginPath();
+  [[s, 0], [0, s], [-s, s], [-s, 0], [0, -s], [s, -s]].forEach(([q, r], k) => { const i = M[q + ',' + r], [x, y] = pos(i); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.closePath(); ctx.stroke();
+  // 星
+  ctx.fillStyle = theme.line; const d = Math.round(s * 2 / 3);
+  [[0, 0], ...DIRS.map(([a, b]) => [a * d, b * d])].forEach(k => { const i = M[k[0] + ',' + k[1]]; if (i === undefined) return; const [x, y] = pos(i); ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); });
+  // 石
+  G.board.forEach((p, i) => {
+    if (!p) return; const [x, y] = pos(i), dead = G.dead.includes(i);
+    stone(x, y, r0, p, dead ? 0.35 : 1);
+    if (dead) { ctx.save(); ctx.beginPath(); const o = r0 * .5; ctx.moveTo(x - o, y - o); ctx.lineTo(x + o, y + o); ctx.moveTo(x + o, y - o); ctx.lineTo(x - o, y + o); ctx.lineCap = 'round'; ctx.strokeStyle = '#000'; ctx.lineWidth = 6; ctx.stroke(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke(); ctx.restore(); }
+  });
+  if (G.last >= 0 && G.board[G.last]) { const [x, y] = pos(G.last); ctx.beginPath(); ctx.arc(x, y, r0, 0, 7); ctx.fillStyle = 'rgba(34,197,94,.38)'; ctx.fill(); ctx.strokeStyle = '#16a34a'; ctx.lineWidth = 3; ctx.stroke(); }
+  if (!G.over && G.phase === 'playing' && prev >= 0 && mine()) {
+    const [x, y] = pos(prev), ok = sim(G.board, prev, G.turn);
+    if (ok) stone(x, y, r0, G.turn, 0.5); else { ctx.save(); const o = r0 * .5; ctx.lineCap = 'round'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.arc(x, y, r0, 0, 7); ctx.strokeStyle = theme.tx; ctx.globalAlpha = .75; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(x - o, y - o); ctx.lineTo(x + o, y + o); ctx.moveTo(x + o, y - o); ctx.lineTo(x - o, y + o); ctx.lineWidth = 2.5; ctx.stroke(); ctx.restore(); }
+  }
+}
+
+// ===== UI =====
+function canUndo() {
+  if (G.over || G.phase !== 'playing' || !G.hist.length || aiBusy) return false;
+  const top = G.hist[G.hist.length - 1];
+  if (mode === 'online') return top.by === myRole;
+  return seats[G.turn] === 'human' || seats.slice(1).includes('human');
+}
+function undo() {
+  if (!canUndo()) return;
+  let s = G.hist.pop();
+  if (mode === 'local') while (seats[s.by] === 'ai' && G.hist.length) s = G.hist.pop();
+  G.board = s.board; G.damage = s.damage; G.turn = s.turn; G.passes = s.passes; G.last = s.last; G.out = s.out; G.seen.length = s.seen; setSeen(); prev = -1;
+  after();
+}
+function after() { updateUI(); save(); sync(); maybeAI(); }
+function dotHtml(p) { return `<span class="dot" style="background:${theme.fill[p]};border-color:${theme.stroke[p]}"></span>`; }
+function updateUI() {
+  const t = G.turn;
+  $('turnInd').innerHTML = `${dotHtml(t)}${NAMES[t]} (${t}P)${mode === 'local' && seats[t] === 'ai' ? ' AI' : ''}${mode === 'online' && t === myRole ? ' ★あなた' : ''}`;
+  $('dmg').innerHTML = [1, 2, 3].map(p => `<span>${dotHtml(p)}${NAMES[p]} <strong>${G.damage[p]}</strong>${G.out[p] ? '(投)' : ''}</span>`).join('');
+  $('modeBadge').textContent = mode === 'online' ? `オンライン (${myRole ? NAMES[myRole] : '-'})` : 'ローカル ' + seats.slice(1).map(s => s === 'ai' ? 'AI' : '人').join('');
+  $('btnUndo').disabled = !canUndo();
+  $('bnDead').classList.toggle('hidden', G.phase !== 'dead');
+  $('bnResult').classList.toggle('hidden', !G.over);
+  render();
+}
+function showResult() { $('resTitle').textContent = G.result.title; $('resDet').innerHTML = G.result.details; $('resModal').classList.remove('hidden'); }
+$('btnViewBoard').onclick = () => $('resModal').classList.add('hidden');
+$('btnShowResult').onclick = showResult;
+$('btnAgain').onclick = () => { $('resModal').classList.add('hidden'); reset(); };
+$('btnPass').onclick = () => { if (!G.over && G.phase === 'playing' && mine()) { doPass(); after(); } };
+$('btnResign').onclick = () => { if (!G.over && G.phase === 'playing' && mine()) { resign(); after(); } };
+$('btnUndo').onclick = () => { snd.click(); if (canUndo()) $('undoModal').classList.remove('hidden'); };
+$('btnUndoNo').onclick = () => $('undoModal').classList.add('hidden');
+$('btnUndoOk').onclick = () => { $('undoModal').classList.add('hidden'); undo(); };
+$('btnDeadCancel').onclick = () => { snd.click(); G.phase = 'playing'; G.passes = 0; G.dead = []; after(); };
+$('btnDeadOk').onclick = () => { snd.click(); finishScore(); after(); };
+
+// 設定
+function syncSettings() {
+  document.querySelectorAll('#sizeBtns .opt').forEach(b => b.classList.toggle('on', +b.dataset.v === pendingSize));
+  document.querySelectorAll('#modeBtns .opt').forEach(b => b.classList.toggle('on', b.dataset.v === mode));
+  $('seatBox').classList.toggle('hidden', mode !== 'local'); $('onlineBox').classList.toggle('hidden', mode !== 'online');
+  $('seatBtns').innerHTML = '';
+  [1, 2, 3].forEach(p => { const b = document.createElement('button'); b.className = 'opt' + (seats[p] === 'ai' ? ' on' : ''); b.innerHTML = `${dotHtml(p)}${NAMES[p]}: ${seats[p] === 'ai' ? 'AI' : '人'}`; b.onclick = () => { snd.click(); seats[p] = seats[p] === 'ai' ? 'human' : 'ai'; syncSettings(); save(); }; $('seatBtns').appendChild(b); });
+  $('btnSound').textContent = snd.on ? 'ON' : 'OFF'; $('btnSound').classList.toggle('on', snd.on);
+}
+document.querySelectorAll('#sizeBtns .opt').forEach(b => b.onclick = () => { snd.click(); pendingSize = +b.dataset.v; syncSettings(); save(); });
+document.querySelectorAll('#modeBtns .opt').forEach(b => b.onclick = () => {
+  snd.click(); if (mode === 'online' && b.dataset.v !== 'online') { closePeer(); $('roomSt').textContent = ''; }
+  mode = b.dataset.v; syncSettings(); updateUI();
+});
+document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { snd.click(); seats = [0, ...[...b.dataset.p].map(c => c === 'h' ? 'human' : 'ai')]; syncSettings(); save(); });
+$('btnSound').onclick = () => { snd.on = !snd.on; syncSettings(); snd.click(); save(); };
+$('btnOpenSettings').onclick = () => { snd.click(); syncSettings(); $('setModal').classList.remove('hidden'); };
+$('btnCloseSettings').onclick = () => $('setModal').classList.add('hidden');
+$('btnNew').onclick = () => { snd.click(); $('setModal').classList.add('hidden'); reset(); };
+function applyTheme(th) {
+  theme = th; NAMES[3] = th.n3; const s = document.body.style;
+  s.setProperty('--bg', th.bg); s.setProperty('--tx', th.tx); s.setProperty('--card', th.card); s.setProperty('--bd', th.bd);
+  if (G) { updateUI(); save(); }
+}
+function buildThemes() {
+  Object.values(THEMES).forEach(th => {
+    const b = document.createElement('button');
+    b.className = 'w-full p-2.5 rounded-lg border flex items-center justify-between text-xs font-bold';
+    b.style.cssText = `background:${th.bg};color:${th.tx};border-color:${th.bd}`;
+    b.innerHTML = `<span>${th.name}</span><div class="flex gap-1">${[1, 2, 3].map(p => `<div class="w-3 h-3 rounded-full" style="background:${th.fill[p]};border:1px solid ${th.stroke[p]}"></div>`).join('')}</div>`;
+    b.onclick = () => { snd.click(); applyTheme(th); };
+    $('themeList').appendChild(b);
+  });
+}
+function reset() {
+  if (mode === 'online' && !isHost) { $('roomSt').textContent = '新規対局はホストが開始します'; return; }
+  build(pendingSize); G = newG(pendingSize); setSeen(); prev = -1; aiBusy = false; $('aiOv').classList.add('hidden');
+  $('resModal').classList.add('hidden'); after();
+}
+
+// ===== オンライン (PeerJS / WebRTC) =====
+const PFX = 'diamondgo-';
+function closePeer() {
+  conns.forEach(c => { try { c.close(); } catch (e) { } }); conns = [];
+  if (hostConn) { try { hostConn.close(); } catch (e) { } hostConn = null; }
+  if (peer) { try { peer.destroy(); } catch (e) { } peer = null; }
+  myRole = null; isHost = false; roomCode = null;
+}
+function sync(except) {
+  if (mode !== 'online') return;
+  const msg = { t: 'state', G };
+  if (isHost) conns.forEach(c => { if (c !== except && c.open) c.send(msg); });
+  else if (hostConn && hostConn.open) hostConn.send(msg);
+}
+function recv(data, from) {
+  if (data.t === 'role') { myRole = data.role; $('roomSt').textContent = `参加完了！ あなた: ${NAMES[myRole]}`; updateUI(); return; }
+  if (data.t !== 'state') return;
+  const wasOver = G.over; G = data.G;
+  if (G.size !== SIDE * 2 - 1) { build(G.size); pendingSize = G.size; resizeCanvas(); }
+  setSeen(); prev = -1;
+  if (G.over && !wasOver && G.result) showResult();
+  if (!G.over) $('resModal').classList.add('hidden');
+  updateUI(); save();
+  if (isHost) sync(from);
+}
+function wire(c) {
+  c.on('data', d => recv(d, c));
+  c.on('close', () => { conns = conns.filter(x => x !== c); $('roomSt').textContent = '相手が切断しました'; });
+}
+$('btnCreate').onclick = () => {
+  snd.click(); closePeer(); $('roomSt').textContent = 'ルーム作成中...';
+  const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+  peer = new Peer(PFX + code.toLowerCase(), { debug: 0 });
+  peer.on('open', () => {
+    isHost = true; myRole = 1; roomCode = code; $('roomIn').value = code;
+    $('roomSt').textContent = `ルームID: ${code} (参加者 0/2)`;
+    peer.on('connection', c => {
+      if (conns.length >= 2) { c.close(); return; }
+      conns.push(c); wire(c);
+      c.on('open', () => {
+        c.send({ t: 'role', role: conns.length + 1 });
+        $('roomSt').textContent = `ルームID: ${code} (参加者 ${conns.length}/2)`;
+        build(pendingSize); G = newG(pendingSize); setSeen(); prev = -1; $('resModal').classList.add('hidden'); updateUI(); save(); sync();
+      });
+    });
+  });
+  peer.on('error', e => { $('roomSt').textContent = e.type === 'unavailable-id' ? 'IDが重複しました。もう一度お試しください' : '部屋作成エラー'; });
+};
+$('btnJoin').onclick = () => {
+  snd.click(); const code = $('roomIn').value.trim().toUpperCase();
+  if (code.length !== 5) { $('roomSt').textContent = '5桁のIDを入力してください'; return; }
+  closePeer(); $('roomSt').textContent = '接続中...';
+  peer = new Peer({ debug: 0 });
+  peer.on('open', () => { hostConn = peer.connect(PFX + code.toLowerCase(), { reliable: true }); wire(hostConn); hostConn.on('open', () => { $('roomSt').textContent = '参加完了！ 対局開始を待っています'; }); });
+  peer.on('error', e => { $('roomSt').textContent = e.type === 'peer-unavailable' ? '部屋が見つかりません' : '接続エラーが発生しました'; });
+};
+window.addEventListener('pagehide', () => { save(); if (mode === 'online') closePeer(); });
+
+// ===== 起動 =====
+window.onload = () => {
+  buildThemes();
+  if (!load()) { build(9); G = newG(9); setSeen(); }
+  applyTheme(theme); syncSettings();
+  if (G.over && G.result) $('bnResult').classList.remove('hidden');
+  resizeCanvas(); updateUI(); maybeAI();
+};
+</script>
+</body>
+</html>

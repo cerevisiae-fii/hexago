@@ -279,44 +279,237 @@ function resign() {
   } else { G.passes = 0; nextTurn(); }
 }
 
-// ===== AI =====
+// ===== AI (囲碁風の局面評価・戦術判断) =====
+// 3人制なので「自分の地を増やす」だけでなく、両者の勢力・弱い石・終盤の空点を評価する。
 function regionInfo(b) {
   const id = Array(P.length).fill(-1), regs = [];
   for (let i = 0; i < P.length; i++) if (!b[i] && id[i] < 0) {
-    const reg = [i], cols = new Set(), bs = new Set(); id[i] = regs.length;
-    for (let k = 0; k < reg.length; k++) for (const n of NB[reg[k]]) { if (!b[n]) { if (id[n] < 0) { id[n] = regs.length; reg.push(n); } } else { cols.add(b[n]); bs.add(n); } }
-    regs.push({ size: reg.length, cols, b: bs.size });
+    const reg = [i], cols = new Set(), borders = new Set(); id[i] = regs.length;
+    for (let k = 0; k < reg.length; k++) for (const n of NB[reg[k]]) {
+      if (!b[n]) { if (id[n] < 0) { id[n] = regs.length; reg.push(n); } }
+      else { cols.add(b[n]); borders.add(n); }
+    }
+    regs.push({ points: reg, size: reg.length, cols, b: borders.size });
   }
   return { id, regs };
 }
-// 空き領域ごとの基本価値: 自陣(囲われた地)は大きく減点、相手の地への侵入も減点、ダメ(小さい境界)はほぼ無価値
-function regionBase(r, p) {
-  if (r.cols.size === 1 && r.size <= 2.5 * r.b + 2) return r.cols.has(p) ? -200 : -80;
-  if (r.cols.size >= 2 && r.size <= 3) return -5;
-  return 25;
+function hexDist(i, j) {
+  const dq = P[i][0] - P[j][0], dr = P[i][1] - P[j][1];
+  return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
 }
 function aiChoose() {
-  const b = G.board, p = G.turn, c = SIDE - 1, { id, regs } = regionInfo(b); let best = null, bs = -1e9;
-  for (let i = 0; i < P.length; i++) {
-    const r = sim(b, i, p); if (!r) continue;
-    const base = regionBase(regs[id[i]], p);
-    let s = base + r.cap.length * 100;
-    const l = libCount(r.a, group(r.a, i));
-    if (l <= 1) s -= 150; else if (l === 2) s -= 15;
-    // 自分のアタリの石を救う
-    for (const n of NB[i]) if (b[n] === p && libCount(b, group(b, n)) <= 1 && l >= 2) { s += 60; break; }
-    // 相手の石を追い詰める
-    const done = new Set();
-    for (const n of NB[i]) if (b[n] && b[n] !== p && !done.has(n)) { const g = group(b, n); g.forEach(x => done.add(x)); const ll = libCount(b, g); if (ll <= 2) s += 45 / ll; }
-    if (base > 0) { // 打つ価値のある場所のみ、形・中央寄りを加点
-      s += Math.min(l, 6) * 3 + NB[i].filter(n => b[n] === p).length * 2;
-      const [q, rr] = P[i]; s -= (Math.abs(q) + Math.abs(rr) + Math.abs(q + rr)) / 2 / c * 6;
-    }
-    s += Math.random() * 4;
-    if (s > bs) { bs = s; best = i; }
+  const b = G.board, p = G.turn, radius = SIDE - 1;
+  const occupied = b.reduce((n, v) => n + (v ? 1 : 0), 0);
+  const fill = occupied / b.length;
+  const opening = fill < 0.30, endgame = fill > 0.62;
+  // プレイヤーごとに性格を固定。1=堅実、2=大模様、3=攻撃型。
+  const style = p === 1 ? 'territory' : p === 2 ? 'framework' : 'fighter';
+  const { id, regs } = regionInfo(b);
+  const stones = [[], [], [], []];
+  b.forEach((v, i) => { if (v) stones[v].push(i); });
+  const groups = new Map();
+  for (let i = 0; i < b.length; i++) if (b[i] && !groups.has(i)) {
+    const g = group(b, i), libs = libCount(b, g);
+    for (const x of g) groups.set(x, { stones: g, libs, color: b[i] });
   }
-  // 価値のある手がなければパス (他者がパスしているときは基準を緩める)
-  if (best === null || bs < 0 || (G.passes > 0 && bs < 15)) return -1;
+  let best = -1, bestScore = -Infinity;
+  const distTo = (i, list) => {
+    let d = 99;
+    for (const j of list) { const x = hexDist(i, j); if (x < d) d = x; }
+    return d;
+  };
+  // 現在の厳密な地。終盤は地を埋める手より、境界・ダメ・侵入を優先する。
+  const territoryNow = territory();
+  for (let i = 0; i < P.length; i++) {
+    if (b[i]) continue;
+    const move = sim(b, i, p);
+    if (!move) continue;
+    const ownGroup = group(move.a, i), libsAfter = libCount(move.a, ownGroup);
+    let score = 0;
+    // 捕獲は最優先。アタリの救出と相手の弱い石への圧力。
+    score += move.cap.length * (endgame ? 115 : 145);
+    const adjacentGroups = new Set();
+    for (const n of NB[i]) if (b[n]) {
+      const info = groups.get(n);
+      if (!info || adjacentGroups.has(info.stones[0])) continue;
+      adjacentGroups.add(info.stones[0]);
+      if (info.color === p) {
+        if (info.libs === 1 && libsAfter > 1) score += 105;
+        else if (info.libs === 2 && libsAfter > 2) score += 24;
+        // 連絡は切断・捕獲を防ぐときに価値がある。単なる塊への隣接は低評価。
+        if (info.libs <= 2) score += 12;
+      } else {
+        if (info.libs === 1) score += 65;
+        else if (info.libs === 2) score += 31;
+        else if (info.libs === 3) score += 9;
+      }
+    }
+    if (libsAfter === 1) score -= 125;
+    else if (libsAfter === 2) score -= 24;
+    else if (libsAfter === 3) score -= 5;
+
+    // 眼づくり：自分の石に囲まれた空点を眼候補として評価。
+    // とくに呼吸点の少ない大きな連を守る眼は、単なる地の拡張より優先する。
+    const adjacentOwn = NB[i].filter(n => b[n] === p).length;
+    const adjacentEnemy = NB[i].filter(n => b[n] && b[n] !== p).length;
+    const degree = NB[i].length;
+    const eyeLike = adjacentOwn >= Math.max(2, degree - 1) && adjacentEnemy === 0;
+    // この手で隣接する空点が眼として完成する数を数える。
+    let eyesCreated = 0;
+    for (const n of NB[i]) if (!b[n]) {
+      const around = NB[n];
+      if (around.every(x => x === i || b[x] === p)) eyesCreated++;
+    }
+    const threatenedOwn = new Set();
+    for (const n of NB[i]) if (b[n] === p) {
+      const info = groups.get(n);
+      if (info && info.libs <= 4) threatenedOwn.add(info.stones[0]);
+    }
+    if (eyeLike) score += 3; // 眼候補点への無意味な着手自体は強く優遇しない
+    if (eyesCreated) score += eyesCreated * (threatenedOwn.size ? 28 : 17);
+    if (threatenedOwn.size && eyesCreated) score += 12 + threatenedOwn.size * 5;
+    // 1線（最外周）は、眼の完成・捕獲/救出・終盤のヨセ以外では大きく抑制。
+
+    const nearestAll = distTo(i, stones[1].concat(stones[2], stones[3]));
+    const nearestOwn = distTo(i, stones[p]);
+    const [q, r] = P[i], radial = Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) / Math.max(1, radius);
+    const starDist = Math.max(1, Math.round(radius * 2 / 3));
+    const star = (Math.abs(q) === starDist && Math.abs(r) === starDist) ||
+      (Math.abs(q) === starDist && r === 0) || (Math.abs(r) === starDist && q === 0) ||
+      (q === starDist && r === -starDist) || (q === -starDist && r === starDist) ||
+      (q === 0 && r === 0);
+
+    if (opening) {
+      // 序盤は塊の隣を埋めず、盤面全体へ展開。辺に寄りすぎず、星付近を評価する。
+      const target = style === 'territory' ? (radius <= 4 ? 2.3 : 3.0)
+        : style === 'framework' ? (radius <= 4 ? 3.0 : 4.2) : (radius <= 4 ? 2.5 : 3.5);
+      score += 18 - Math.abs(nearestAll - target) * (style === 'framework' ? 5 : 7);
+      score += Math.min(nearestOwn, radius + 1) * (style === 'framework' ? 2.0 : 1.2);
+      const idealRadial = style === 'territory' ? 0.68 : style === 'framework' ? 0.48 : 0.58;
+      score += (0.70 - Math.abs(radial - idealRadial)) * (style === 'framework' ? 24 : 20);
+      if (star) score += style === 'framework' ? 10 : 5;
+
+      // 序盤の「点」ではなく「境界線」を作る評価。
+      // 自石から2〜4間ほど離れ、敵の勢力にも近すぎず遠すぎない場所を、
+      // 囲いの輪郭を描く候補として評価する。
+      const ownD = nearestOwn;
+      let nearestEnemy = 99;
+      for (const enemy of [1, 2, 3]) if (enemy !== p) {
+        nearestEnemy = Math.min(nearestEnemy, distTo(i, stones[enemy]));
+      }
+      if (stones[p].length) {
+        const markerDistance = style === 'framework' ? 4 : style === 'territory' ? 2.5 : 3;
+        score += 12 - Math.abs(ownD - markerDistance) * (style === 'framework' ? 3 : 4);
+      }
+      // 相手の石がある側へも目を配るが、無防備な接触や相手の地の中には突っ込まない。
+      if (nearestEnemy <= 5) {
+        score += Math.max(0, 6 - nearestEnemy) * (style === 'fighter' ? 2.5 : 1.8);
+        if (nearestEnemy === 1) score -= style === 'fighter' ? 0 : 8;
+      }
+      // 自石と敵石の間に位置し、境界を押さえる着手を加点。
+      if (ownD < 99 && nearestEnemy < 99) {
+        const balancedFrontier = Math.abs(ownD - nearestEnemy);
+        if (ownD >= 2 && ownD <= 5 && nearestEnemy >= 2 && nearestEnemy <= 5)
+          score += Math.max(0, 8 - balancedFrontier * 2);
+      }
+      if (NB[i].some(n => b[n] === p)) score -= style === 'territory' ? 3 : 11;
+      // 直接接触より、相手との境界を一間〜数間あけて先に形作る。
+      if (NB[i].some(n => b[n] && b[n] !== p)) score -= style === 'fighter' ? 0 : 9;
+
+      // 3線相当の地点から境界を組み、後で囲い切れる形を優先する。
+      if (style === 'territory') score += (0.70 - Math.abs(radial - 0.70)) * 18;
+      if (style === 'framework') score += (0.48 - Math.abs(radial - 0.48)) * 15;
+
+      // すでに相手が伸びている側を完全に無視して遠方へ散らばるのを防ぐ。
+      // 近くに敵の勢力がある場合、自石との連携が取れる境界候補を少し優先。
+      if (nearestEnemy <= 4 && ownD <= 5 && ownD >= 2) score += 5;
+      if (nearestEnemy > 6 && ownD > 5) score -= 8;
+    } else {
+      // 中盤は勢力圏を広げ、相手の弱い石に近づく。自石への無目的な密着を抑える。
+      score += Math.min(nearestOwn, 5) * (endgame ? 1.2 : style === 'framework' ? 3.2 : 2.4);
+      if (nearestOwn === 1) score -= endgame ? 2 : style === 'fighter' ? 1 : 7;
+      const midIdeal = style === 'territory' ? 0.70 : style === 'framework' ? 0.48 : 0.60;
+      score += (0.70 - Math.abs(radial - midIdeal)) * (endgame ? 4 : style === 'framework' ? 13 : 10);
+      // 攻撃型は相手の石の切断点や薄い連の近くを狙う。
+      if (style === 'fighter') {
+        for (const n of NB[i]) if (b[n] && b[n] !== p) {
+          const info = groups.get(n);
+          if (info && info.libs <= 3) score += info.libs === 1 ? 45 : info.libs === 2 ? 18 : 8;
+        }
+      }
+      // 境界をつなぐ展開：堅実型は短いノビ・ハネ、大模様型は広いヒラキを評価。
+      if (style === 'territory' && nearestOwn >= 2 && nearestOwn <= 3) score += 7;
+      if (style === 'framework' && nearestOwn >= 3 && nearestOwn <= 5) score += 7;
+      // 相手の勢力が近いのに自分の石から遠すぎる場所へ打つのは控え、
+      // 自石と相手の間で境界を支える着手を選びやすくする。
+      let frontierEnemyDist = 99;
+      for (const enemy of [1, 2, 3]) if (enemy !== p) {
+        frontierEnemyDist = Math.min(frontierEnemyDist, distTo(i, stones[enemy]));
+      }
+      if (nearestOwn >= 2 && nearestOwn <= 5 && frontierEnemyDist >= 2 && frontierEnemyDist <= 5)
+        score += 5;
+      if (nearestOwn > 5 && frontierEnemyDist > 5 && !endgame) score -= 7;
+      for (const enemy of [1, 2, 3]) if (enemy !== p) {
+        let nearestWeak = 99;
+        for (const j of stones[enemy]) {
+          const info = groups.get(j);
+          if (info && info.libs <= 3) nearestWeak = Math.min(nearestWeak, hexDist(i, j));
+        }
+        if (nearestWeak <= 3) score += (4 - nearestWeak) * (endgame ? 3 : 7);
+      }
+    }
+
+    const reg = regs[id[i]];
+    if (reg) {
+      if (reg.cols.size === 1) {
+        const owner = [...reg.cols][0];
+        if (owner === p) {
+          // 自分の確定地を埋めるのは原則損。生き石の眼を埋める手も避ける。
+          score -= reg.size <= 2 ? 75 : 22;
+        } else {
+          // 相手の地への侵入は、小さな領域への自殺的な手を避けて選別する。
+          if (reg.size <= 2) score -= 70;
+          else if (reg.size <= 5) score += endgame ? 4 : -10;
+          else score += endgame ? 8 : style === 'fighter' ? 1 : -7;
+          // 相手の地・地になりそうな空間への単独侵入は、十分な呼吸点や味方の援護がなければ避ける。
+          if (!endgame && adjacentEnemy === 0 && nearestOwn > 3) score -= reg.size >= 3 ? 18 : 8;
+          if (libsAfter <= 2 && move.cap.length === 0) score -= 22;
+          if (style === 'fighter' && reg.size >= 6 && libsAfter >= 3 && nearestOwn <= 3) score += 10;
+        }
+      } else if (reg.cols.size >= 2) {
+        // 中立地・境界の空点。終盤に残ったダメを埋める。
+        score += endgame ? 10 : 3;
+        if (reg.size === 1) score += endgame ? 9 : 2;
+      } else {
+        // まだ誰の地でもない大きな空間は、序中盤の布石候補。
+        score += opening ? 0 : Math.min(reg.size, 12) * (endgame ? 0.15 : 0.45);
+      }
+    }
+
+    // 終盤は現在の地を直接埋めるより、相手の地を減らす/中立点を取る手を優先。
+    if (endgame) {
+      if (reg && reg.cols.size === 1 && reg.cols.has(p)) score -= 18;
+      if (reg && reg.cols.size === 1 && !reg.cols.has(p) && reg.size >= 3) score += 5;
+      if (G.passes > 0) score += 2;
+    }
+    // 盤面端の石は囲える地が小さくなりやすい。最外周（1線）は原則避ける。
+    // 例外：眼候補、捕獲/アタリ救出、終盤の実利あるヨセ。
+    const tactical = move.cap.length > 0 || [...adjacentGroups].some(key => {
+      const info = groups.get(key);
+      return info && info.libs <= 2;
+    });
+    if (radial >= 0.96 && !eyeLike && !tactical && !endgame) score -= 28;
+    else score -= Math.max(0, radial - 0.82) * (endgame ? 3 : 9);
+    // 相手の地の中で即座に取られる手は、捕獲などの明確な狙いがなければ避ける。
+    if (libsAfter <= 1 && move.cap.length === 0 && !eyeLike) score -= 65;
+    score += Math.random() * (style === 'fighter' ? 2.0 : 0.9);
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+
+  // 序盤・中盤は打つ場所を探す。終盤は実利のある手がなければパスし、無意味な埋め合いを防ぐ。
+  if (best < 0) return -1;
+  if (endgame && bestScore < 7) return -1;
+  if (G.passes > 0 && bestScore < (endgame ? 10 : -8)) return -1;
   return best;
 }
 const aiSeatOf = p => mode === 'online' ? G.aiSeat === p : seats[p] === 'ai';

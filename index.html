@@ -22,9 +22,12 @@ canvas{display:block;touch-action:manipulation}
   <header class="w-full flex items-center justify-between pt-1">
     <div class="w-8"></div>
     <h1 class="text-2xl sm:text-3xl font-extrabold tracking-wider text-center">HEXAGO</h1>
+    <div class="flex items-center gap-1">
+    <button id="btnOpenRules" title="ルールを見る" aria-label="ルールを見る" class="w-9 h-9 flex items-center justify-center rounded-full text-current opacity-35 hover:opacity-70 hover:bg-black/5 active:scale-95 transition-all text-2xl font-semibold">ⓘ</button>
     <button id="btnOpenSettings" title="設定" class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-black/5 active:scale-95 transition-all">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
     </button>
+    </div>
   </header>
 
   <div class="card w-full p-3.5 sm:p-4 rounded-xl flex flex-col gap-3 text-sm sm:text-base">
@@ -33,15 +36,15 @@ canvas{display:block;touch-action:manipulation}
       <div id="modeBadge" class="text-xs px-2.5 py-1 rounded-full font-semibold border opacity-80"></div>
     </div>
     <div class="flex items-center justify-between text-xs sm:text-sm pt-1 border-t border-current/10">
-      <div class="flex gap-3 flex-wrap"><span class="opacity-70">アゲハマ(ダメージ):</span><span id="dmg" class="flex gap-3"></span></div>
+      <div class="flex gap-3 flex-wrap"><span class="opacity-70">現在の石数:</span><span id="dmg" class="flex gap-3"></span></div>
       <div class="flex items-center gap-1.5"><span class="opacity-70">コミ:</span><span class="font-bold">なし</span></div>
     </div>
   </div>
 
   <div class="w-full flex justify-center items-center relative">
     <canvas id="cv" class="w-full aspect-square cursor-pointer max-w-[520px] rounded-lg"></canvas>
-    <div id="aiOv" class="absolute inset-0 bg-black/20 rounded-lg flex items-center justify-center hidden pointer-events-none">
-      <div class="bg-white/90 text-neutral-900 px-4 py-2 rounded-full shadow-lg font-bold text-sm flex items-center gap-2"><div class="w-3.5 h-3.5 border-2 border-neutral-900 border-t-transparent rounded-full animate-spin"></div>AI 思考中...</div>
+    <div id="aiOv" class="absolute top-2 left-2 z-10 flex items-start justify-start hidden pointer-events-none">
+      <div class="bg-white/95 text-neutral-900 border border-neutral-300 px-3 py-2 rounded-full shadow-lg font-bold text-sm flex items-center gap-2"><div class="w-3.5 h-3.5 border-2 border-neutral-900 border-t-transparent rounded-full animate-spin"></div>AI 思考中...</div>
     </div>
   </div>
 
@@ -52,11 +55,11 @@ canvas{display:block;touch-action:manipulation}
   </div>
 
   <div id="bnDead" class="hidden w-full flex flex-col gap-2 p-3 bg-amber-50 text-amber-900 text-xs sm:text-sm rounded-xl border border-amber-200 shadow-sm">
-    <div class="flex items-center justify-between font-bold"><span>⚠️ 死に石選択フェーズ</span><span class="text-xs opacity-75">死に石をタップして指定</span></div>
-    <p class="text-xs text-amber-800/90 leading-relaxed">地の中に残った死に石をタップしてマーキングしてください(死に石は持ち主のダメージになります)。完了したら「確定して集計」を押します。</p>
+    <div class="flex items-center justify-between font-bold"><span>⚠️ 終局・死に石確認</span><span class="text-xs opacity-75">自動判定済み</span></div>
+    <p class="text-xs text-amber-800/90 leading-relaxed">死んでいる可能性が高い石を自動で選択しました。盤面の×印を確認し、判定が違う連はタップして切り替えてください。確定後、死に石を取り除き「地＋盤上の石」で集計します。</p>
     <div class="flex gap-2 pt-1">
       <button id="btnDeadCancel" class="flex-1 py-1.5 px-3 bg-white border border-amber-300 font-bold rounded-lg hover:bg-amber-100 text-amber-900">対局再開</button>
-      <button id="btnDeadOk" class="flex-1 py-1.5 px-3 bg-amber-900 text-white font-bold rounded-lg hover:bg-amber-800">確定して集計</button>
+      <button id="btnDeadOk" class="flex-1 py-1.5 px-3 bg-amber-900 text-white font-bold rounded-lg hover:bg-amber-800">死に石を除去して集計</button>
     </div>
   </div>
 
@@ -89,8 +92,14 @@ canvas{display:block;touch-action:manipulation}
     </div>
     <div class="flex flex-col gap-1.5">
       <label class="text-xs font-bold tracking-wider text-neutral-500">盤面サイズ (1方向の路数)</label>
-      <div class="grid grid-cols-3 gap-2" id="sizeBtns">
-        <button data-v="9" class="opt">9路盤</button><button data-v="13" class="opt">13路盤</button><button data-v="19" class="opt">19路盤</button>
+      <div class="grid grid-cols-4 gap-2" id="sizeBtns">
+        <button data-v="9" class="opt">9路盤</button><button data-v="13" class="opt">13路盤</button><button data-v="19" class="opt">19路盤</button><button data-v="25" class="opt">25路盤</button>
+      </div>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">参加人数 (ローカル)</label>
+      <div class="grid grid-cols-5 gap-2" id="playerCountBtns">
+        <button data-count="2" class="opt">2人</button><button data-count="3" class="opt">3人</button><button data-count="4" class="opt">4人</button><button data-count="5" class="opt">5人</button><button data-count="6" class="opt">6人</button>
       </div>
     </div>
     <div class="flex flex-col gap-1.5">
@@ -136,6 +145,20 @@ canvas{display:block;touch-action:manipulation}
   </div>
 </div>
 
+<!-- rules modal -->
+<div id="rulesModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+  <div class="bg-white text-neutral-900 p-5 sm:p-6 max-w-md w-full rounded-2xl shadow-2xl flex flex-col gap-4 border border-neutral-200 max-h-[88vh] overflow-y-auto">
+    <div class="flex items-center justify-between border-b pb-3 border-neutral-200"><h2 class="text-xl font-extrabold">HEXAGO ルール</h2><button id="btnCloseRules" class="text-neutral-400 hover:text-neutral-800 text-xl font-bold px-2" aria-label="閉じる">✕</button></div>
+    <section class="flex flex-col gap-1"><h3 class="font-bold">1. 基本</h3><p class="text-sm leading-relaxed">自分の手番に空いている交点へ1個打ちます。石は隣接する6方向の呼吸点がすべてなくなると取られます。自殺手や同一局面を繰り返す手は打てません。</p></section>
+    <section class="flex flex-col gap-1"><h3 class="font-bold">2. 得点（エリア方式）</h3><p class="text-sm leading-relaxed">終局後の得点は「自分の地＋盤上に残った自分の石」です。地1マスも石1個も、それぞれ1点です。捕獲数は得点から差し引きません。</p></section>
+    <section class="flex flex-col gap-1"><h3 class="font-bold">3. 地と中立地</h3><p class="text-sm leading-relaxed">空点の連結領域が1色の石だけに接している場合、その色の地として数えます。複数色に接する領域は中立地として数えません。</p></section>
+    <section class="flex flex-col gap-1"><h3 class="font-bold">4. パスと終局</h3><p class="text-sm leading-relaxed">生きているプレイヤー全員が続けてパスすると終局確認に入ります。死んでいる可能性が高い石は自動で選択されます。×印を確認し、必要なら連をタップして判定を直してから確定します。</p></section>
+    <section class="flex flex-col gap-1"><h3 class="font-bold">5. 死に石と勝敗</h3><p class="text-sm leading-relaxed">確定した死に石は盤上から取り除いてから地を再計算します。取り除いた石は石の得点に含めません。最終得点が最も高いプレイヤーの勝ちです。</p></section>
+    <p class="text-xs text-neutral-500 leading-relaxed">※ 死に石の自動判定は盤面からの推定です。誤判定があれば終局確認画面で修正してください。</p>
+    <button id="btnRulesDone" class="w-full py-2.5 bg-neutral-900 text-white text-sm font-bold rounded-xl">閉じる</button>
+  </div>
+</div>
+
 <!-- result modal -->
 <div id="resModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
   <div class="bg-white text-neutral-900 p-6 sm:p-8 max-w-sm w-full text-center flex flex-col gap-5 rounded-2xl shadow-2xl border border-neutral-200">
@@ -149,15 +172,28 @@ canvas{display:block;touch-action:manipulation}
 </div>
 
 <script>
-// ===== テーマ (石色: 黒 / 白 / 朱) =====
-const NAMES = ['', '黒', '白', '朱'];
-const mk = (id, name, bg, tx, board, line, card, bd, c1, s1, c2, s2, c3, s3, n3) => ({ id, name, n3, bg, tx, board, line, card, bd, fill: [0, c1, c2, c3], stroke: [0, s1, s2, s3] });
+// ===== テーマごとの石色・色名（2〜6人対応） =====
+const NAMES = ['', '黒', '白', '赤', '青', '黄', '紫'];
+const PLAYER_COLORS = [{fill:'#171717',stroke:'#333333'},{fill:'#ffffff',stroke:'#333333'},{fill:'#e4471f',stroke:'#333333'},{fill:'#2878d0',stroke:'#333333'},{fill:'#d68910',stroke:'#333333'},{fill:'#8e44ad',stroke:'#333333'}];
+function playerFill(p){ return (theme.fill[p] || PLAYER_COLORS[p-1]?.fill || '#888888'); }
+function playerStroke(p){ return (theme.stroke[p] || PLAYER_COLORS[p-1]?.stroke || '#333333'); }
+function playerName(p){ return (theme.names && theme.names[p]) || NAMES[p] || `プレイヤー${p}`; }
+const mk = (id, name, bg, tx, board, line, card, bd, fills, edge, names) => ({
+  id, name, bg, tx, board, line, card, bd,
+  fill: [0, ...fills], stroke: [0, ...Array.from({length:6}, () => edge)],
+  names: ['', ...names]
+});
 const THEMES = {
-  default: mk('default', '黒 / 白 / 朱 (標準)', '#ffffff', '#171717', '#ffffff', '#171717', '#fafafa', '#e5e5e5', '#171717', '#000', '#ffffff', '#171717', '#e4471f', '#7c1d0a', '朱'),
-  dark: mk('dark', '黒 / 白 / 縹 (ダーク)', '#0a0a0a', '#f5f5f5', '#0f0f0f', '#525252', '#171717', '#262626', '#262626', '#e5e5e5', '#f5f5f5', '#171717', '#3f74b4', '#c3dcf5', '縹'),
-  go: mk('go', 'ベージュ / 濃い茶色 / 深緑 (伝統碁盤)', '#f4e4bc', '#3e2211', '#e8c88b', '#3e2211', '#ebd19d', '#cbb07a', '#1c1917', '#000', '#fef3c7', '#78350f', '#2f8a5a', '#14452c', '深緑'),
-  cyber: mk('cyber', '紺 / 水色 / 黄金 (ネイビー)', '#020617', '#e0f2fe', '#0f172a', '#0284c7', '#0f172a', '#1e293b', '#1e293b', '#38bdf8', '#38bdf8', '#0284c7', '#f2b01e', '#6b3d08', '黄金'),
-  fancy: mk('fancy', 'ピンク / 濃い赤紫 / 紫 (ファンシー)', '#fdf4ff', '#4a044e', '#fbcfe8', '#831843', '#fae8ff', '#f5d0fe', '#831843', '#500724', '#fff1f2', '#9f1239', '#7e3fb8', '#3b1466', '紫')
+  default: mk('default', '五行思想（白背景）', '#ffffff', '#171717', '#ffffff', '#777777', '#fafafa', '#e5e5e5',
+    ['#111111', '#F4F4F4', '#E53935', '#1769AA', '#F0A000', '#9B2FCB'], '#555555', ['黒', '白', '赤', '青', '黄', '紫']),
+  dark: mk('dark', 'ダークモード', '#171717', '#f5f5f5', '#202020', '#777777', '#262626', '#3a3a3a',
+    ['#1A1A1A', '#FFFFFF', '#FF2A6D', '#00E5FF', '#F4D03F', '#05FFA1'], '#B8B8B8', ['黒', '白', 'マゼンタ', 'シアン', 'イエロー', 'グリーン']),
+  go: mk('go', '和風色名（木目風）', '#D9B382', '#3e2211', '#D9B382', '#7B5A36', '#ebd19d', '#cbb07a',
+    ['#1B1B1B', '#F9F6EE', '#eb6101', '#2B6492', '#f8b500', '#bbbcde'], '#5C4033', ['黒', '白', '朱', '縹', '山吹', '藤色']),
+  cyber: mk('cyber', 'サイバーモード', '#101827', '#e0f2fe', '#101827', '#38bdf8', '#172033', '#334155',
+    ['#0F172A', '#F8FAFC', '#FF007F', '#00F0FF', '#39FF14', '#BD00FF'], '#94A3B8', ['黒', '白', 'ピンク', 'シアン', 'ライム', '紫']),
+  fancy: mk('fancy', 'ファンシーモード', '#FFF0F5', '#4a044e', '#FFF0F5', '#e7a6c2', '#fae8ff', '#f5d0fe',
+    ['#171717', '#ffffff', '#FF85A1', '#70D6FF', '#FFD670', '#9B5DE5'], '#8B7180', ['黒', '白', 'ピンク', '青', '黄', '紫'])
 };
 let theme = THEMES.default;
 
@@ -185,11 +221,11 @@ function build(n) {
 
 // ===== 状態 =====
 let G, seenSet = new Set();
-let onlineAI = false, pendingSize = 9, mode = 'local', seats = [0, 'human', 'human', 'human'];
+let onlineAI = false, pendingSize = 9, mode = 'local', playerCount = 3, seats = [0, 'human', 'human', 'human', 'ai', 'ai', 'ai'];
 let prev = -1, ptype = 'mouse', aiBusy = false;
 let peer = null, conns = [], hostConn = null, myRole = null, isHost = false, roomCode = null;
 
-function newG(n) { return { aiSeat: (mode === 'online' && onlineAI) ? 3 : 0, size: n, board: Array(P.length).fill(0), turn: 1, damage: [0, 0, 0, 0], passes: 0, over: false, result: null, phase: 'playing', dead: [], last: -1, out: [false, false, false, false], seen: [], hist: [] }; }
+function newG(n) { const count = mode === 'online' ? 3 : playerCount; return { playerCount: count, aiSeat: (mode === 'online' && onlineAI) ? 3 : 0, size: n, board: Array(P.length).fill(0), turn: 1, damage: Array(count+1).fill(0), passes: 0, over: false, result: null, phase: 'playing', dead: [], last: -1, out: Array(count+1).fill(false), seen: [], hist: [] }; }
 function setSeen() { seenSet = new Set(G.seen); }
 function hash(a) { // cyrb53
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -205,9 +241,9 @@ function save() {
 function load() {
   try {
     const s = JSON.parse(sessionStorage.getItem(KEY) || 'null');
-    if (!s || !s.G || ![9, 13, 19].includes(s.G.size)) return false;
+    if (!s || !s.G || ![9, 13, 19, 25].includes(s.G.size)) return false;
     build(s.G.size); if (s.G.board.length !== P.length) return false;
-    G = s.G; onlineAI = !!s.onlineAI; G.aiSeat = 0; pendingSize = s.pendingSize || G.size; seats = s.seats || seats; mode = 'local';
+    G = s.G; onlineAI = !!s.onlineAI; G.aiSeat = 0; pendingSize = s.pendingSize || G.size; seats = s.seats || seats; playerCount = Math.max(2, Math.min(6, G.playerCount || 3)); G.playerCount=playerCount; G.damage=Array.from({length:playerCount+1},(_,i)=>(G.damage||[])[i]||0); G.out=Array.from({length:playerCount+1},(_,i)=>!!((G.out||[])[i])); seats.length = 7; mode = 'local';
     if (THEMES[s.theme]) theme = THEMES[s.theme]; if (s.sound === false) snd.on = false;
     setSeen(); return true;
   } catch (e) { return false; }
@@ -233,8 +269,8 @@ function sim(b, i, p) {
   if (cap.length && seenSet.has(hash(a))) return null; // コウ(同一局面の再現)
   return { a, cap };
 }
-function activeCount() { return [1, 2, 3].filter(p => !G.out[p]).length; }
-function nextTurn() { let t = G.turn; do { t = t % 3 + 1; } while (G.out[t]); G.turn = t; }
+function activeCount() { return Array.from({length:G.playerCount||3},(_,i)=>i+1).filter(p => !G.out[p]).length; }
+function nextTurn() { let t = G.turn, count=G.playerCount||3, guard=0; do { t = t % count + 1; guard++; } while (G.out[t] && guard<=count); G.turn = t; }
 function snap(by) {
   G.hist.push({ by, board: G.board.slice(), damage: G.damage.slice(), turn: G.turn, passes: G.passes, last: G.last, out: G.out.slice(), seen: G.seen.length });
   if (G.hist.length > 40) G.hist.shift();
@@ -248,10 +284,10 @@ function play(i) {
 }
 function doPass() {
   snd.click(); snap(G.turn); G.passes++; G.last = -1;
-  if (G.passes >= activeCount()) { G.phase = 'dead'; prev = -1; } else nextTurn();
+  if (G.passes >= activeCount()) { G.phase = 'dead'; G.dead = detectDeadStones(); prev = -1; } else nextTurn();
 }
 function territory() {
-  const t = [0, 0, 0, 0], vis = new Set();
+  const t = Array((G?.playerCount || playerCount || 3) + 1).fill(0), vis = new Set();
   for (let i = 0; i < P.length; i++) if (!G.board[i] && !vis.has(i)) {
     const reg = [i], cols = new Set(); vis.add(i);
     for (let k = 0; k < reg.length; k++) for (const n of NB[reg[k]]) { if (!G.board[n]) { if (!vis.has(n)) { vis.add(n); reg.push(n); } } else cols.add(G.board[n]); }
@@ -259,22 +295,60 @@ function territory() {
   }
   return t;
 }
+// 任意の盤面の地を計算。AIの仮想着手評価にも使う。
+function territoryForBoard(board) {
+  const t = Array((G?.playerCount || playerCount || 3) + 1).fill(0), vis = new Set();
+  for (let i = 0; i < P.length; i++) if (!board[i] && !vis.has(i)) {
+    const reg = [i], cols = new Set(); vis.add(i);
+    for (let k = 0; k < reg.length; k++) for (const n of NB[reg[k]]) {
+      if (!board[n]) { if (!vis.has(n)) { vis.add(n); reg.push(n); } }
+      else cols.add(board[n]);
+    }
+    if (cols.size === 1) t[[...cols][0]] += reg.length;
+  }
+  return t;
+}
+// 終局時の死に石を保守的に自動推定。明らかな弱い包囲連のみ初期選択し、確認画面で修正可能。
+function detectDeadStones() {
+  const b = G.board, seen = new Set(), dead = [];
+  for (let i = 0; i < b.length; i++) {
+    if (!b[i] || seen.has(i)) continue;
+    const color = b[i], g = group(b, i); g.forEach(x => seen.add(x));
+    const libs = new Set();
+    for (const x of g) for (const n of NB[x]) if (!b[n]) libs.add(n);
+    const eyes = countEyes(b, g, color);
+    if (eyes > 0 || libs.size > 2 || libs.size === 0) continue;
+    // 各呼吸点が敵石に強く囲まれ、連自身の隣接石が少ない場合だけ死に石候補とする。
+    const surrounded = [...libs].every(lib => {
+      const around = NB[lib].filter(n => b[n] && b[n] !== color);
+      const friendly = NB[lib].filter(n => b[n] === color);
+      return around.length >= Math.max(2, NB[lib].length - 2) && friendly.length <= 1;
+    });
+    const enemyColors = new Set();
+    for (const x of g) for (const n of NB[x]) if (b[n] && b[n] !== color) enemyColors.add(b[n]);
+    if (surrounded && enemyColors.size === 1) dead.push(...g);
+  }
+  return [...new Set(dead)];
+}
 function finishScore() {
-  G.dead.forEach(i => { if (G.board[i]) { G.damage[G.board[i]]++; G.board[i] = 0; } });
+  // 選択された死に石を盤上から除去する（捕獲数による減点はしない）。
+  G.dead.forEach(i => { if (G.board[i]) G.board[i] = 0; });
   G.dead = []; G.phase = 'ended'; G.over = true;
-  const t = territory(), sc = [0, 1, 2, 3].map(p => t[p] - G.damage[p]);
-  const rank = [1, 2, 3].filter(p => !G.out[p]).sort((a, b) => sc[b] - sc[a]);
+  const t = territory();
+  const stones = Array.from({length:(G.playerCount||3)+1},(_,p)=>p===0?0:G.board.filter(v=>v===p).length);
+  const sc = Array.from({length:(G.playerCount||3)+1},(_,p)=>p===0?0:t[p] + stones[p]);
+  const rank = Array.from({length:G.playerCount||3},(_,i)=>i+1).filter(p => !G.out[p]).sort((a, b) => sc[b] - sc[a]);
   const top = rank.filter(p => sc[p] === sc[rank[0]]);
-  const title = top.length > 1 ? `引き分け (${top.map(p => NAMES[p]).join('・')} ${sc[rank[0]]}点)` : `${NAMES[rank[0]]}の勝ち (${sc[rank[0]]}点)`;
-  const row = p => `<div class="flex justify-between items-center"><span><span class="dot" style="background:${theme.fill[p]};border-color:${theme.stroke[p]}"></span>${NAMES[p]}${G.out[p] ? ' (投了)' : ''}</span><span>地 ${t[p]} − アゲハマ ${G.damage[p]} = <strong>${sc[p]}</strong></span></div>`;
-  G.result = { title, details: [1, 2, 3].map(row).join('') };
+  const title = top.length > 1 ? `引き分け (${top.map(p => playerName(p)).join('・')} ${sc[rank[0]]}点)` : `${playerName(rank[0])}の勝ち (${sc[rank[0]]}点)`;
+  const row = p => `<div class="flex justify-between items-center gap-3"><span class="whitespace-nowrap"><span class="dot" style="background:${playerFill(p)};border-color:${playerStroke(p)}"></span>${playerName(p)}${G.out[p] ? ' (投了)' : ''}</span><span class="text-right">地 ${t[p]} ＋ 石 ${stones[p]} ＝ <strong>${sc[p]}点</strong></span></div>`;
+  G.result = { title, details: Array.from({length:G.playerCount||3},(_,i)=>i+1).map(row).join('') };
   snd.win(); showResult();
 }
 function resign() {
   const p = G.turn; G.out[p] = true; snd.click();
   if (activeCount() <= 1) {
-    const w = [1, 2, 3].find(x => !G.out[x]); G.over = true;
-    G.result = { title: `${NAMES[w]}の勝ち`, details: `${NAMES[p]} が投了し、残りは ${NAMES[w]} のみとなりました。` };
+    const w = Array.from({length:G.playerCount||3},(_,i)=>i+1).find(x => !G.out[x]); G.over = true;
+    G.result = { title: `${playerName(w)}の勝ち`, details: `${playerName(p)} が投了し、残りは ${playerName(w)} のみとなりました。` };
     snd.win(); showResult();
   } else { G.passes = 0; nextTurn(); }
 }
@@ -297,21 +371,72 @@ function hexDist(i, j) {
   const dq = P[i][0] - P[j][0], dr = P[i][1] - P[j][1];
   return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
 }
+// 連の眼を数える（六方向の隣接点がすべて自石で囲まれた空点を眼とみなす）。
+function countEyes(b, g, color) {
+  const own = new Set(g), eyes = new Set();
+  for (const stone of g) for (const n of NB[stone]) {
+    if (b[n] || eyes.has(n)) continue;
+    const around = NB[n];
+    if (around.length >= 3 && around.every(x => b[x] === color || own.has(x))) eyes.add(n);
+  }
+  return eyes.size;
+}
+function territoryNowForAI(b, p, regs) {
+  // 「新しく確保できる地」の候補。すでに自分の確定地になっている空間は含めず、
+  // 無所属の大きな空間、または複数色が接している争い中の大きな空間だけを見る。
+  return regs.some(r => r.size >= 6 && (r.cols.size === 0 || r.cols.size > 1));
+}
 function aiChoose() {
   const b = G.board, p = G.turn, radius = SIDE - 1;
   const occupied = b.reduce((n, v) => n + (v ? 1 : 0), 0);
   const fill = occupied / b.length;
   const opening = fill < 0.30, endgame = fill > 0.62;
   // プレイヤーごとに性格を固定。1=堅実、2=大模様、3=攻撃型。
-  const style = p === 1 ? 'territory' : p === 2 ? 'framework' : 'fighter';
+  const style = p % 3 === 1 ? 'territory' : p % 3 === 2 ? 'framework' : 'fighter';
   const { id, regs } = regionInfo(b);
-  const stones = [[], [], [], []];
+  const stones = Array.from({length:(G.playerCount||3)+1},()=>[]);
   b.forEach((v, i) => { if (v) stones[v].push(i); });
   const groups = new Map();
   for (let i = 0; i < b.length; i++) if (b[i] && !groups.has(i)) {
     const g = group(b, i), libs = libCount(b, g);
     for (const x of g) groups.set(x, { stones: g, libs, color: b[i] });
   }
+  // 投了は最後の選択肢。①自分の石に眼が1つもない、②合法手を全て調べても眼を作れない、
+  // ③6目以上の「新しく確保できる地」も作れない、の全条件が成立した場合だけ候補にする。
+  const ownGroups = new Map();
+  for (let i = 0; i < b.length; i++) if (b[i] === p && !ownGroups.has(i)) {
+    const g = group(b, i);
+    const eyes = countEyes(b, g, p);
+    for (const x of g) ownGroups.set(x, { stones: g, eyes });
+  }
+  const hasOwnEyes = [...ownGroups.values()].some(g => g.eyes > 0);
+  let canCreateEye = false, canMakeNewSixLand = false;
+  const currentTerr = territoryForBoard(b);
+  const currentGroups = [...ownGroups.values()];
+  if (!hasOwnEyes && fill > 0.58) {
+    for (let i = 0; i < P.length && !canCreateEye; i++) {
+      if (b[i]) continue;
+      const test = sim(b, i, p);
+      if (!test) continue;
+      const g = group(test.a, i), afterEyes = countEyes(test.a, g, p);
+      const adjacentOwn = NB[i].filter(n => b[n] === p).length;
+      // 完成した眼、または着手によって既存の連に新しい眼ができる場合は投了しない。
+      if (afterEyes > 0 || (adjacentOwn >= Math.max(2, NB[i].length - 1) && NB[i].every(n => !b[n] || b[n] === p))) {
+        canCreateEye = true; break;
+      }
+    }
+    // 6目以上の新しい地：合法手の結果、現在より自分の地が6目以上増える場合。
+    for (let i = 0; i < P.length && !canMakeNewSixLand; i++) {
+      if (b[i]) continue;
+      const test = sim(b, i, p);
+      if (!test) continue;
+      const afterTerr = territoryForBoard(test.a);
+      if ((afterTerr[p] || 0) - (currentTerr[p] || 0) >= 6) canMakeNewSixLand = true;
+    }
+  }
+  const hasLargeUnclaimedLand = territoryNowForAI(b, p, regs);
+  const resignationEligible = fill > 0.58 && !hasOwnEyes && !canCreateEye && !canMakeNewSixLand && !hasLargeUnclaimedLand;
+
   let best = -1, bestScore = -Infinity;
   const distTo = (i, list) => {
     let d = 99;
@@ -334,19 +459,19 @@ function aiChoose() {
       if (!info || adjacentGroups.has(info.stones[0])) continue;
       adjacentGroups.add(info.stones[0]);
       if (info.color === p) {
-        if (info.libs === 1 && libsAfter > 1) score += 105;
-        else if (info.libs === 2 && libsAfter > 2) score += 24;
+        if (info.libs === 1 && libsAfter > 1) score += 125;
+        else if (info.libs === 2 && libsAfter > 2) score += 32;
         // 連絡は切断・捕獲を防ぐときに価値がある。単なる塊への隣接は低評価。
         if (info.libs <= 2) score += 12;
       } else {
-        if (info.libs === 1) score += 65;
+        if (info.libs === 1) score += 78;
         else if (info.libs === 2) score += 31;
         else if (info.libs === 3) score += 9;
       }
     }
-    if (libsAfter === 1) score -= 125;
-    else if (libsAfter === 2) score -= 24;
-    else if (libsAfter === 3) score -= 5;
+    if (libsAfter === 1) score -= 115 + ownGroup.length * 24;
+    else if (libsAfter === 2) score -= 22 + ownGroup.length * 5;
+    else if (libsAfter === 3) score -= 4 + ownGroup.length * 1.5;
 
     // 眼づくり：自分の石に囲まれた空点を眼候補として評価。
     // とくに呼吸点の少ない大きな連を守る眼は、単なる地の拡張より優先する。
@@ -366,11 +491,49 @@ function aiChoose() {
       if (info && info.libs <= 4) threatenedOwn.add(info.stones[0]);
     }
     if (eyeLike) score += 3; // 眼候補点への無意味な着手自体は強く優遇しない
-    if (eyesCreated) score += eyesCreated * (threatenedOwn.size ? 28 : 17);
-    if (threatenedOwn.size && eyesCreated) score += 12 + threatenedOwn.size * 5;
+    if (eyesCreated) score += eyesCreated * (threatenedOwn.size ? 42 : 28);
+    if (threatenedOwn.size && eyesCreated) score += 22 + threatenedOwn.size * 8;
+
+    // 着手後の自連に実際にいくつ眼ができるかを確認。二眼を作れる手は最優先級にする。
+    const postEyes = countEyes(move.a, ownGroup, p);
+    const beforeEyes = countEyes(b, ownGroup.filter(x => b[x] === p), p);
+    if (postEyes >= 2 && beforeEyes < 2) score += 260 + (postEyes - 2) * 35;
+    else if (postEyes === 1 && beforeEyes === 0) score += 95;
+    if (postEyes < 2 && ownGroup.length >= 3 && libsAfter <= 3) score -= 18;
+
+    // 多人数戦の1手先読み：次に動く相手だけでなく、全相手の合法応手を検査する。
+    // 眼の中で色を変えながら取り返されるような「取っても維持できない捕獲」を強く避ける。
+    if (libsAfter <= 4 && move.cap.length === 0) {
+      const libs = new Set();
+      for (const stone of ownGroup) for (const n of NB[stone]) if (!move.a[n]) libs.add(n);
+      let immediateCapture = false;
+      for (const lib of libs) {
+        for (let enemy = 1; enemy <= (G.playerCount || 3); enemy++) {
+          if (enemy === p || G.out[enemy]) continue;
+          const reply = sim(move.a, lib, enemy);
+          if (reply && ownGroup.some(st => reply.cap.includes(st))) { immediateCapture = true; break; }
+        }
+        if (immediateCapture) break;
+      }
+      if (immediateCapture) score -= 620 + ownGroup.length * 65;
+      else if (libsAfter === 2) score -= ownGroup.length >= 4 ? 85 : 38;
+    }
+    // 捕獲直後に自分の石が取り返される形も検査する。取った石の解放点に
+    // すぐ相手が打てて、捕獲した自連が落ちるなら「捕獲点数」を評価しない。
+    if (move.cap.length > 0 && libsAfter <= 5) {
+      const libs = new Set();
+      for (const stone of ownGroup) for (const n of NB[stone]) if (!move.a[n]) libs.add(n);
+      let recaptured = false;
+      for (const lib of libs) for (let enemy = 1; enemy <= (G.playerCount || 3); enemy++) {
+        if (enemy === p || G.out[enemy]) continue;
+        const reply = sim(move.a, lib, enemy);
+        if (reply && ownGroup.some(st => reply.cap.includes(st))) { recaptured = true; break; }
+      }
+      if (recaptured) score -= 700 + ownGroup.length * 70;
+    }
     // 1線（最外周）は、眼の完成・捕獲/救出・終盤のヨセ以外では大きく抑制。
 
-    const nearestAll = distTo(i, stones[1].concat(stones[2], stones[3]));
+    const nearestAll = distTo(i, stones.slice(1).flat());
     const nearestOwn = distTo(i, stones[p]);
     const [q, r] = P[i], radial = Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) / Math.max(1, radius);
     const starDist = Math.max(1, Math.round(radius * 2 / 3));
@@ -394,7 +557,7 @@ function aiChoose() {
       // 囲いの輪郭を描く候補として評価する。
       const ownD = nearestOwn;
       let nearestEnemy = 99;
-      for (const enemy of [1, 2, 3]) if (enemy !== p) {
+      for (const enemy of Array.from({length:G.playerCount||3},(_,i)=>i+1)) if (enemy !== p) {
         nearestEnemy = Math.min(nearestEnemy, distTo(i, stones[enemy]));
       }
       if (stones[p].length) {
@@ -425,9 +588,10 @@ function aiChoose() {
       if (nearestEnemy <= 4 && ownD <= 5 && ownD >= 2) score += 5;
       if (nearestEnemy > 6 && ownD > 5) score -= 8;
     } else {
-      // 中盤は勢力圏を広げ、相手の弱い石に近づく。自石への無目的な密着を抑える。
-      score += Math.min(nearestOwn, 5) * (endgame ? 1.2 : style === 'framework' ? 3.2 : 2.4);
-      if (nearestOwn === 1) score -= endgame ? 2 : style === 'fighter' ? 1 : 7;
+      // 中盤も「隣に置くほど良い」評価にしない。石の密集を抑え、地の輪郭を広げる。
+      score += Math.min(nearestOwn, 5) * (endgame ? 0.8 : style === 'framework' ? 3.5 : 2.8);
+      if (!endgame && nearestOwn === 1) score -= style === 'fighter' ? 4 : 13;
+      if (!endgame && nearestOwn === 2) score += style === 'framework' ? 5 : 3;
       const midIdeal = style === 'territory' ? 0.70 : style === 'framework' ? 0.48 : 0.60;
       score += (0.70 - Math.abs(radial - midIdeal)) * (endgame ? 4 : style === 'framework' ? 13 : 10);
       // 攻撃型は相手の石の切断点や薄い連の近くを狙う。
@@ -443,24 +607,33 @@ function aiChoose() {
       // 相手の勢力が近いのに自分の石から遠すぎる場所へ打つのは控え、
       // 自石と相手の間で境界を支える着手を選びやすくする。
       let frontierEnemyDist = 99;
-      for (const enemy of [1, 2, 3]) if (enemy !== p) {
+      for (const enemy of Array.from({length:G.playerCount||3},(_,i)=>i+1)) if (enemy !== p) {
         frontierEnemyDist = Math.min(frontierEnemyDist, distTo(i, stones[enemy]));
       }
       if (nearestOwn >= 2 && nearestOwn <= 5 && frontierEnemyDist >= 2 && frontierEnemyDist <= 5)
-        score += 5;
+        score += 8;
+      if (nearestOwn === 1 && move.cap.length === 0) score -= 5;
       if (nearestOwn > 5 && frontierEnemyDist > 5 && !endgame) score -= 7;
-      for (const enemy of [1, 2, 3]) if (enemy !== p) {
+      for (const enemy of Array.from({length:G.playerCount||3},(_,i)=>i+1)) if (enemy !== p) {
         let nearestWeak = 99;
         for (const j of stones[enemy]) {
           const info = groups.get(j);
           if (info && info.libs <= 3) nearestWeak = Math.min(nearestWeak, hexDist(i, j));
         }
-        if (nearestWeak <= 3) score += (4 - nearestWeak) * (endgame ? 3 : 7);
+        if (nearestWeak <= 3) {
+          // 近づくだけの接触戦を避け、攻撃型でも安全な距離から圧力をかける。
+          score += (4 - nearestWeak) * (endgame ? 2 : style === 'fighter' ? 4 : 1.5);
+        }
       }
     }
 
     const reg = regs[id[i]];
     if (reg) {
+      // 1〜2目の相手の確定地は、捕獲や二眼形成などの明確な利益がない限り埋めない。
+      // 小さな眼の中で多人数が順番に取り返す無意味な連鎖を防ぐ。
+      if (reg.cols.size === 1 && !reg.cols.has(p) && reg.size <= 2 && move.cap.length === 0 && postEyes < 2) {
+        score -= 210 + (libsAfter <= 2 ? 100 : 0);
+      }
       if (reg.cols.size === 1) {
         const owner = [...reg.cols][0];
         if (owner === p) {
@@ -468,13 +641,18 @@ function aiChoose() {
           score -= reg.size <= 2 ? 75 : 22;
         } else {
           // 相手の地への侵入は、小さな領域への自殺的な手を避けて選別する。
-          if (reg.size <= 2) score -= 70;
-          else if (reg.size <= 5) score += endgame ? 4 : -10;
-          else score += endgame ? 8 : style === 'fighter' ? 1 : -7;
-          // 相手の地・地になりそうな空間への単独侵入は、十分な呼吸点や味方の援護がなければ避ける。
-          if (!endgame && adjacentEnemy === 0 && nearestOwn > 3) score -= reg.size >= 3 ? 18 : 8;
-          if (libsAfter <= 2 && move.cap.length === 0) score -= 22;
-          if (style === 'fighter' && reg.size >= 6 && libsAfter >= 3 && nearestOwn <= 3) score += 10;
+          if (reg.size <= 2) score -= 90;
+          else if (reg.size <= 5) score -= endgame ? 8 : 16;
+          else score += endgame ? 2 : style === 'fighter' ? -3 : -12;
+          // 相手の地への侵入は「生き残れる見込み」がある場合だけ選ぶ。
+          // 味方から遠く、眼がなく、呼吸点も少ない単独侵入は双方の損なので大幅減点。
+          const isolatedInvasion = adjacentEnemy === 0 && nearestOwn > 3 && move.cap.length === 0;
+          if (isolatedInvasion) score -= reg.size >= 3 ? (endgame ? 35 : 42) : 24;
+          if (isolatedInvasion && postEyes < 2 && libsAfter <= 5)
+            score -= 145 + Math.max(0, 5 - libsAfter) * 24 + ownGroup.length * 12;
+          if (isolatedInvasion && postEyes === 0 && libsAfter <= 3) score -= 100;
+          if (libsAfter <= 2 && move.cap.length === 0) score -= 35;
+          if (style === 'fighter' && reg.size >= 6 && libsAfter >= 4 && nearestOwn <= 3) score += 10;
         }
       } else if (reg.cols.size >= 2) {
         // 中立地・境界の空点。終盤に残ったダメを埋める。
@@ -492,6 +670,60 @@ function aiChoose() {
       if (reg && reg.cols.size === 1 && !reg.cols.has(p) && reg.size >= 3) score += 5;
       if (G.passes > 0) score += 2;
     }
+    // 終盤は、自分の確定地の外に残った「眼がなく、まだ殺せる相手の連」を
+    // 放置せず、呼吸点を詰めて捕獲する。自分の地を埋める手は対象外。
+    // 取り返し合いを防ぐため、着手後の相手連の呼吸点と自連の安全性も確認する。
+    if (endgame && !(reg && reg.cols.size === 1 && reg.cols.has(p))) {
+      const checkedEnemyGroups = new Set();
+      for (const n of NB[i]) {
+        const enemy = b[n];
+        if (!enemy || enemy === p || G.out[enemy]) continue;
+        const enemyGroup = group(b, n), enemyKey = enemyGroup[0];
+        if (checkedEnemyGroups.has(enemyKey)) continue;
+        checkedEnemyGroups.add(enemyKey);
+        const enemyEyes = countEyes(b, enemyGroup, enemy);
+        const enemyLibsBefore = libCount(b, enemyGroup);
+        if (enemyEyes >= 2) continue; // 二眼がある相手は死に石扱いしない
+        const afterEnemyGroup = enemyGroup.filter(x => move.a[x] === enemy);
+        if (!afterEnemyGroup.length) continue;
+        const enemyLibsAfter = libCount(move.a, afterEnemyGroup);
+        if (enemyLibsAfter < enemyLibsBefore) {
+          // 眼のない弱い連を実際に追い詰める手を高く評価。
+          score += (enemyEyes === 0 ? 34 : 12) + Math.max(0, enemyLibsBefore - enemyLibsAfter) * 12;
+          if (enemyLibsAfter === 1) score += 72 + Math.min(enemyGroup.length, 8) * 9;
+          else if (enemyLibsAfter === 2) score += 30;
+          // 大きな死に石候補を殺す価値を反映。ただし自分も取られる手は除外。
+          if (enemyEyes === 0 && enemyLibsBefore <= 5) score += Math.max(0, 6 - enemyLibsAfter) * 14;
+        }
+      }
+      if (move.cap.length) score += move.cap.length * 95;
+      // ダメ埋め：中立の空点に安全に石を残せるなら、石1個分の得点を見込んで優先。
+      if (reg && reg.cols.size >= 2 && libsAfter >= 2) score += 16 + (reg.size === 1 ? 8 : 0);
+      // 呼吸点が少なく眼のない敵連への安全な詰めを、終盤はさらに優先する。
+      for (const n of NB[i]) {
+        const enemy = b[n];
+        if (!enemy || enemy === p || G.out[enemy]) continue;
+        const eg = group(b, n);
+        if (eg[0] !== n && eg[0] < n) continue;
+        if (countEyes(b, eg, enemy) === 0) {
+          const el = libCount(b, eg);
+          if (el <= 3 && libsAfter >= 2) score += el === 1 ? 115 : el === 2 ? 70 : 35;
+        }
+      }
+    }
+
+    // 局所密集ペナルティ：近傍に石が多すぎる点は、眼/戦術手以外では避ける。
+    // これにより相手の隣へ反射的に打ち続ける「ギュウギュウ」を抑える。
+    const nearOwn2 = stones[p].filter(j => hexDist(i, j) <= 2).length;
+    const nearEnemy2 = Array.from({length:G.playerCount||3},(_,i)=>i+1).filter(c => c !== p)
+      .reduce((n, c) => n + stones[c].filter(j => hexDist(i, j) <= 2).length, 0);
+    const localTactic = move.cap.length > 0 || threatenedOwn.size > 0 ||
+      [...adjacentGroups].some(key => { const info = groups.get(key); return info && info.libs <= 2; });
+    if (!endgame && !localTactic && !eyeLike) {
+      score -= Math.max(0, nearOwn2 - 2) * (style === 'framework' ? 3 : 4);
+      score -= Math.max(0, nearEnemy2 - 3) * (style === 'fighter' ? 1.5 : 3);
+    }
+
     // 盤面端の石は囲える地が小さくなりやすい。最外周（1線）は原則避ける。
     // 例外：眼候補、捕獲/アタリ救出、終盤の実利あるヨセ。
     const tactical = move.cap.length > 0 || [...adjacentGroups].some(key => {
@@ -506,22 +738,27 @@ function aiChoose() {
     if (score > bestScore) { bestScore = score; best = i; }
   }
 
-  // 序盤・中盤は打つ場所を探す。終盤は実利のある手がなければパスし、無意味な埋め合いを防ぐ。
+  // 投了条件を満たす場合でも、まずは合法手を評価する。明確な得点手・延命手があれば打つ。
+  if (resignationEligible && (best < 0 || bestScore < -25)) return -2;
+  // 終盤は中立点（ダメ）を埋め、弱い相手連を攻める手を優先。
+  // エリア得点では、中立点に安全に石を置くことは石1点の獲得になる。
   if (best < 0) return -1;
-  if (endgame && bestScore < 7) return -1;
-  if (G.passes > 0 && bestScore < (endgame ? 10 : -8)) return -1;
+  if (endgame && bestScore < 12) return -1;
+  if (G.passes > 0 && bestScore < (endgame ? 16 : -4)) return -1;
   return best;
 }
 const aiSeatOf = p => mode === 'online' ? G.aiSeat === p : seats[p] === 'ai';
 function maybeAI() {
   if (G.over || aiBusy || (mode === 'online' && !isHost)) return;
-  if (G.phase === 'dead') { if (mode === 'local' && seats.slice(1).every(s => s === 'ai')) { finishScore(); after(); } return; }
+  if (G.phase === 'dead') { if (mode === 'local' && seats.slice(1, playerCount + 1).every(s => s === 'ai')) { finishScore(); after(); } return; }
   if (!aiSeatOf(G.turn)) return;
   aiBusy = true; $('aiOv').classList.remove('hidden');
   setTimeout(() => {
     aiBusy = false; $('aiOv').classList.add('hidden');
     if (G.over || G.phase !== 'playing' || !aiSeatOf(G.turn)) return;
-    const m = aiChoose(); if (m < 0 || !play(m)) doPass();
+    const m = aiChoose();
+    if (m === -2) resign();
+    else if (m < 0 || !play(m)) doPass();
     after();
   }, 450 + Math.random() * 300);
 }
@@ -567,7 +804,7 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 function stone(x, y, r, p, alpha) {
   ctx.save(); ctx.globalAlpha = alpha; ctx.beginPath(); ctx.arc(x, y, r, 0, 7);
-  ctx.fillStyle = theme.fill[p]; ctx.fill(); ctx.strokeStyle = theme.stroke[p]; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  ctx.fillStyle = playerFill(p); ctx.fill(); ctx.strokeStyle = playerStroke(p); ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
 }
 function render() {
   const { w, cell, pos } = metrics(), s = SIDE - 1, r0 = cell * 0.44;
@@ -609,12 +846,12 @@ function undo() {
   after();
 }
 function after() { updateUI(); save(); sync(); maybeAI(); }
-function dotHtml(p) { return `<span class="dot" style="background:${theme.fill[p]};border-color:${theme.stroke[p]}"></span>`; }
+function dotHtml(p) { return `<span class="dot" style="background:${playerFill(p)};border-color:${playerStroke(p)}"></span>`; }
 function updateUI() {
   const t = G.turn;
-  $('turnInd').innerHTML = `${dotHtml(t)}${NAMES[t]} (${t}P)${aiSeatOf(t) ? ' AI' : ''}${mode === 'online' && t === myRole ? ' ★あなた' : ''}`;
-  $('dmg').innerHTML = [1, 2, 3].map(p => `<span>${dotHtml(p)}${NAMES[p]} <strong>${G.damage[p]}</strong>${G.out[p] ? '(投)' : ''}</span>`).join('');
-  $('modeBadge').textContent = mode === 'online' ? `オンライン${G.aiSeat ? ' 人人AI' : ' 人人人'} (${myRole ? NAMES[myRole] : '-'})` : 'ローカル ' + seats.slice(1).map(s => s === 'ai' ? 'AI' : '人').join('');
+  $('turnInd').innerHTML = `${dotHtml(t)}${playerName(t)} (${t}P)${aiSeatOf(t) ? ' AI' : ''}${mode === 'online' && t === myRole ? ' ★あなた' : ''}`;
+  $('dmg').innerHTML = Array.from({length:G.playerCount||3},(_,i)=>i+1).map(p => `<span>${dotHtml(p)}${playerName(p)} <strong>${G.board.filter(v => v === p).length}</strong>${G.out[p] ? '(投)' : ''}</span>`).join('');
+  $('modeBadge').textContent = mode === 'online' ? `オンライン${G.aiSeat ? ' 人人AI' : ' 人人人'} (${myRole ? playerName(myRole) : '-'})` : 'ローカル ' + seats.slice(1,playerCount+1).map(s => s === 'ai' ? 'AI' : '人').join('');
   if (mode === 'online' && !isHost) $('aiOv').classList.toggle('hidden', !(G.aiSeat && G.turn === G.aiSeat && !G.over && G.phase === 'playing'));
   $('btnUndo').disabled = !canUndo();
   $('bnDead').classList.toggle('hidden', G.phase !== 'dead');
@@ -635,27 +872,33 @@ $('btnDeadOk').onclick = () => { snd.click(); finishScore(); after(); };
 
 // 設定
 function syncSettings() {
+  document.querySelectorAll('#playerCountBtns .opt').forEach(b => b.classList.toggle('on', +b.dataset.count === playerCount));
   document.querySelectorAll('#sizeBtns .opt').forEach(b => b.classList.toggle('on', +b.dataset.v === pendingSize));
   document.querySelectorAll('#modeBtns .opt').forEach(b => b.classList.toggle('on', b.dataset.v === mode));
   $('seatBox').classList.toggle('hidden', mode !== 'local'); $('onlineBox').classList.toggle('hidden', mode !== 'online');
   $('seatBtns').innerHTML = '';
-  [1, 2, 3].forEach(p => { const b = document.createElement('button'); b.className = 'opt' + (seats[p] === 'ai' ? ' on' : ''); b.innerHTML = `${dotHtml(p)}${NAMES[p]}: ${seats[p] === 'ai' ? 'AI' : '人'}`; b.onclick = () => { snd.click(); seats[p] = seats[p] === 'ai' ? 'human' : 'ai'; syncSettings(); save(); }; $('seatBtns').appendChild(b); });
+  Array.from({length:playerCount},(_,i)=>i+1).forEach(p => { const b = document.createElement('button'); b.className = 'opt' + (seats[p] === 'ai' ? ' on' : ''); b.innerHTML = `${dotHtml(p)}${playerName(p)}: ${seats[p] === 'ai' ? 'AI' : '人'}`; b.onclick = () => { snd.click(); seats[p] = seats[p] === 'ai' ? 'human' : 'ai'; syncSettings(); save(); }; $('seatBtns').appendChild(b); });
   document.querySelectorAll('#onlineTypeBtns .opt').forEach(b => b.classList.toggle('on', (b.dataset.v === 'hha') === onlineAI));
   $('btnSound').textContent = snd.on ? 'ON' : 'OFF'; $('btnSound').classList.toggle('on', snd.on);
 }
+document.querySelectorAll('#playerCountBtns .opt').forEach(b => b.onclick = () => { if(mode==='online') return; playerCount=+b.dataset.count; seats=[0,...Array.from({length:6},(_,i)=>seats[i+1]||'ai')]; syncSettings(); save(); });
 document.querySelectorAll('#sizeBtns .opt').forEach(b => b.onclick = () => { snd.click(); pendingSize = +b.dataset.v; syncSettings(); save(); });
 document.querySelectorAll('#modeBtns .opt').forEach(b => b.onclick = () => {
   snd.click(); if (mode === 'online' && b.dataset.v !== 'online') { closePeer(); $('roomSt').textContent = ''; }
   mode = b.dataset.v; syncSettings(); updateUI();
 });
 document.querySelectorAll('#onlineTypeBtns .opt').forEach(b => b.onclick = () => { snd.click(); onlineAI = b.dataset.v === 'hha'; syncSettings(); save(); });
-document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { snd.click(); seats = [0, ...[...b.dataset.p].map(c => c === 'h' ? 'human' : 'ai')]; syncSettings(); save(); });
+document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { snd.click(); seats = [0, ...Array.from({length:playerCount},(_,i)=>[...b.dataset.p][i%3] === 'h' ? 'human' : 'ai')]; syncSettings(); save(); });
 $('btnSound').onclick = () => { snd.on = !snd.on; syncSettings(); snd.click(); save(); };
 $('btnOpenSettings').onclick = () => { snd.click(); syncSettings(); $('setModal').classList.remove('hidden'); };
+$('btnOpenRules').onclick = () => { snd.click(); $('rulesModal').classList.remove('hidden'); };
+$('btnCloseRules').onclick = () => $('rulesModal').classList.add('hidden');
+$('btnRulesDone').onclick = () => $('rulesModal').classList.add('hidden');
+$('rulesModal').addEventListener('click', e => { if (e.target === $('rulesModal')) $('rulesModal').classList.add('hidden'); });
 $('btnCloseSettings').onclick = () => $('setModal').classList.add('hidden');
 $('btnNew').onclick = () => { snd.click(); $('setModal').classList.add('hidden'); reset(); };
 function applyTheme(th) {
-  theme = th; NAMES[3] = th.n3; const s = document.body.style;
+  theme = th; const s = document.body.style;
   s.setProperty('--bg', th.bg); s.setProperty('--tx', th.tx); s.setProperty('--card', th.card); s.setProperty('--bd', th.bd);
   if (G) { updateUI(); save(); }
 }
@@ -664,7 +907,7 @@ function buildThemes() {
     const b = document.createElement('button');
     b.className = 'w-full p-2.5 rounded-lg border flex items-center justify-between text-xs font-bold';
     b.style.cssText = `background:${th.bg};color:${th.tx};border-color:${th.bd}`;
-    b.innerHTML = `<span>${th.name}</span><div class="flex gap-1">${[1, 2, 3].map(p => `<div class="w-3 h-3 rounded-full" style="background:${th.fill[p]};border:1px solid ${th.stroke[p]}"></div>`).join('')}</div>`;
+    b.innerHTML = `<span>${th.name}</span><div class="flex gap-1">${[1, 2, 3, 4, 5, 6].map(p => `<div class="w-3 h-3 rounded-full" style="background:${th.fill[p]};border:1px solid ${th.stroke[p]}"></div>`).join('')}</div>`;
     b.onclick = () => { snd.click(); applyTheme(th); };
     $('themeList').appendChild(b);
   });
@@ -690,7 +933,7 @@ function sync(except) {
   else if (hostConn && hostConn.open) hostConn.send(msg);
 }
 function recv(data, from) {
-  if (data.t === 'role') { myRole = data.role; $('roomSt').textContent = `参加完了！ あなた: ${NAMES[myRole]}`; updateUI(); return; }
+  if (data.t === 'role') { myRole = data.role; $('roomSt').textContent = `参加完了！ あなた: ${playerName(myRole)}`; updateUI(); return; }
   if (data.t !== 'state') return;
   const wasOver = G.over; G = data.G;
   if (G.size !== SIDE * 2 - 1) { build(G.size); pendingSize = G.size; resizeCanvas(); }

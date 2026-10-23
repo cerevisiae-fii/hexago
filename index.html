@@ -396,6 +396,30 @@ function aiChoose() {
   const { id, regs } = regionInfo(b);
   const stones = Array.from({length:(G.playerCount||3)+1},()=>[]);
   b.forEach((v, i) => { if (v) stones[v].push(i); });
+
+  // 序盤の展開方向を6辺から選ぶ。自石が比較的多く、敵石が少ない辺を1〜2辺選び、
+  // その辺側の半分〜約70%を主な展開範囲にする。盤面の反対側へ散りすぎる手を抑える。
+  const edgeDefs = [
+    {name:'+q', coord:([q,r])=>q}, {name:'+r', coord:([q,r])=>r},
+    {name:'q+r+', coord:([q,r])=>q+r}, {name:'-q', coord:([q,r])=>-q},
+    {name:'-r', coord:([q,r])=>-r}, {name:'q+r-', coord:([q,r])=>-(q+r)}
+  ];
+  const edgeStats = edgeDefs.map((edge, ei) => {
+    let own=0, enemy=0, ownNear=0, enemyNear=0;
+    for (let j=0;j<P.length;j++) {
+      const v=b[j]; if(!v) continue;
+      const d=radius-edge.coord(P[j]);
+      if(d<=2) { if(v===p) { own+=1; ownNear += d===0?1.5:d===1?1.2:1; } else { enemy+=1; enemyNear += d===0?1.5:d===1?1.2:1; } }
+    }
+    // 自石の足場を優先しつつ、敵石の少ない辺を選ぶ。まだ自石がない場合は敵の薄い辺へ。
+    const score = ownNear*2.2 - enemyNear*1.45 + (own===0 && enemy===0 ? 0.15 : 0);
+    return {ei, score, own, enemy};
+  });
+  edgeStats.sort((a,b)=>b.score-a.score);
+  const preferredEdges = [edgeStats[0].ei];
+  // 2辺目は1辺目と同程度に有望な場合だけ採用し、展開範囲を広げすぎない。
+  if (edgeStats.length>1 && edgeStats[1].score >= edgeStats[0].score-2.2) preferredEdges.push(edgeStats[1].ei);
+  const preferredCoords = preferredEdges.map(ei=>edgeDefs[ei].coord);
   const groups = new Map();
   for (let i = 0; i < b.length; i++) if (b[i] && !groups.has(i)) {
     const g = group(b, i), libs = libCount(b, g);
@@ -551,6 +575,21 @@ function aiChoose() {
       const idealRadial = style === 'territory' ? 0.68 : style === 'framework' ? 0.48 : 0.58;
       score += (0.70 - Math.abs(radial - idealRadial)) * (style === 'framework' ? 24 : 20);
       if (star) score += style === 'framework' ? 10 : 5;
+
+      // 選んだ1〜2辺を足場にする。辺から盤面中央を越えて反対側へ行くほど減点し、
+      // 辺から少し内側（約30〜70%）に散らばる手を優先する。
+      const edgeDepths = preferredCoords.map(coord => radius - coord(P[i]));
+      const bestDepth = Math.min(...edgeDepths);
+      const sideCoord = Math.max(...preferredCoords.map(coord => coord(P[i])));
+      if (sideCoord >= 0) {
+        // 0〜約70%の深さは許容。中心を越えた展開は強く抑制。
+        const depthRatio = bestDepth / Math.max(1, 2*radius);
+        if (depthRatio <= 0.70) score += 13 - depthRatio*9;
+        else score -= 10 + (depthRatio-0.70)*42;
+        if (sideCoord >= radius*0.45 && bestDepth >= 1) score += 5;
+      } else {
+        score -= 12 + Math.abs(sideCoord)*2.5;
+      }
 
       // 序盤の「点」ではなく「境界線」を作る評価。
       // 自石から2〜4間ほど離れ、敵の勢力にも近すぎず遠すぎない場所を、

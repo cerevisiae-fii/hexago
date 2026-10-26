@@ -36,7 +36,7 @@ canvas{display:block;touch-action:manipulation}
       <div id="modeBadge" class="text-xs px-2.5 py-1 rounded-full font-semibold border opacity-80"></div>
     </div>
     <div class="flex items-center justify-between text-xs sm:text-sm pt-1 border-t border-current/10">
-      <div class="flex gap-3 flex-wrap"><span class="opacity-70">現在の石数:</span><span id="dmg" class="flex gap-3"></span></div>
+      <div class="flex-1 min-w-0 flex flex-col gap-1"><span class="opacity-70">現在の石数:</span><span id="dmg" class="grid gap-x-3 gap-y-1 min-w-0"></span></div>
       <div class="flex items-center gap-1.5"><span class="opacity-70">コミ:</span><span class="font-bold">なし</span></div>
     </div>
   </div>
@@ -90,50 +90,69 @@ canvas{display:block;touch-action:manipulation}
       <h2 class="text-xl font-bold">ゲーム設定</h2>
       <button id="btnCloseSettings" class="text-neutral-400 hover:text-neutral-800 text-xl font-bold px-2">✕</button>
     </div>
-    <div class="flex flex-col gap-1.5">
+    <div id="modeConfig" class="flex flex-col gap-1.5">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">対戦モード</label>
+      <div class="grid grid-cols-2 gap-2" id="modeBtns">
+        <button data-v="local" class="opt">ローカル対戦</button><button data-v="online" class="opt">オンライン対戦</button>
+      </div>
+    </div>
+    <div id="onlineRoleConfig" class="flex flex-col gap-1.5 hidden">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">オンラインでの役割</label>
+      <div class="grid grid-cols-2 gap-2" id="boardViewToggle">
+        <button type="button" id="btnHostBoard" data-board-view="host" class="opt">ホスト</button>
+        <button type="button" id="btnParticipantBoard" data-board-view="participant" class="opt">参加者</button>
+      </div>
+    </div>
+    <div id="boardSizeConfig" class="flex flex-col gap-1.5">
       <label class="text-xs font-bold tracking-wider text-neutral-500">盤面サイズ (1方向の路数)</label>
       <div class="grid grid-cols-4 gap-2" id="sizeBtns">
         <button data-v="9" class="opt">9路盤</button><button data-v="13" class="opt">13路盤</button><button data-v="19" class="opt">19路盤</button><button data-v="25" class="opt">25路盤</button>
       </div>
     </div>
-    <div class="flex flex-col gap-1.5">
-      <label class="text-xs font-bold tracking-wider text-neutral-500">参加人数 (ローカル)</label>
+    <div id="playerCountConfig" class="flex flex-col gap-1.5">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">部屋設定：参加人数</label>
       <div class="grid grid-cols-5 gap-2" id="playerCountBtns">
         <button data-count="2" class="opt">2人</button><button data-count="3" class="opt">3人</button><button data-count="4" class="opt">4人</button><button data-count="5" class="opt">5人</button><button data-count="6" class="opt">6人</button>
       </div>
     </div>
-    <div class="flex flex-col gap-1.5">
-      <label class="text-xs font-bold tracking-wider text-neutral-500">対戦モード</label>
-      <div class="grid grid-cols-2 gap-2" id="modeBtns">
-        <button data-v="local" class="opt">ローカル (人 / AI)</button><button data-v="online" class="opt">オンライン (3人)</button>
-      </div>
-    </div>
     <div id="seatBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-2">
-      <span class="text-xs font-bold text-neutral-600">各席のプレイヤー (タップで 人 / AI 切替):</span>
-      <div class="grid grid-cols-3 gap-2" id="seatBtns"></div>
-      <div class="grid grid-cols-3 gap-2 text-xs">
-        <button data-p="hhh" class="opt">人人人</button><button data-p="hha" class="opt">人人AI</button><button data-p="haa" class="opt">人AIAI</button>
+      <span class="text-xs font-bold text-neutral-600">プレイヤー枠（人間 / AI）</span>
+      <p class="text-[11px] leading-relaxed text-neutral-500">初期状態はすべて人間です。対局中の人間 / AI 切替は即時反映されます。人数・盤サイズの変更は次の対局から適用されます。</p>
+      <div class="flex gap-2">
+        <button data-bulk="human" class="opt flex-1">全員人間</button>
+        <button data-bulk="ai" class="opt flex-1">全員AI</button>
       </div>
+      <div class="flex flex-col gap-2" id="seatBtns"></div>
     </div>
     <div id="onlineBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-3 hidden text-xs">
-      <div class="flex flex-col gap-1">
-        <span class="font-bold text-neutral-700">構成 (ホストが部屋作成前に選択):</span>
-        <div class="grid grid-cols-2 gap-2" id="onlineTypeBtns"><button data-v="hhh" class="opt">人人人 (3人)</button><button data-v="hha" class="opt">人人AI (朱席=AI)</button></div>
+      <div id="hostRoomSection" class="flex flex-col gap-1.5">
+        <span class="font-bold text-neutral-700">部屋を作る（対局中でも作成できます）</span>
+        <label for="hostNickname" class="text-neutral-600">ホストのニックネーム（5字以内）</label>
+        <input id="hostNickname" maxlength="5" placeholder="例：ホスト" class="w-full px-3 py-2 border border-neutral-300 rounded-lg text-sm focus:outline-none focus:border-neutral-900">
+        <label for="hostRoomId" class="text-neutral-600">設定するルームID（英数字・ハイフン・アンダースコア）</label>
+        <input id="hostRoomId" maxlength="32" autocomplete="off" placeholder="例：my-room_01" class="w-full px-3 py-2 border border-neutral-300 rounded-lg text-center font-mono text-sm uppercase focus:outline-none focus:border-neutral-900">
+        <button id="btnCreate" class="py-2 bg-neutral-900 text-white font-bold rounded-lg hover:bg-neutral-800">このIDでルーム作成</button>
       </div>
-      <div class="flex flex-col gap-1">
-        <span class="font-bold text-neutral-700">部屋を作る (ホスト=黒 / 参加者が揃うと開始):</span>
-        <button id="btnCreate" class="py-2 bg-neutral-900 text-white font-bold rounded-lg hover:bg-neutral-800">ルーム作成</button>
-      </div>
-      <div class="border-t border-neutral-200 pt-2 flex flex-col gap-1.5">
-        <span class="font-bold text-neutral-700">部屋に入る (ゲスト: 先に入った順に白・3色目):</span>
+      <div id="joinRoomSection" class="border-t border-neutral-200 pt-3 flex flex-col gap-1.5 hidden">
+        <span class="font-bold text-neutral-700">部屋に参加</span>
+        <label for="roomIn" class="text-neutral-600">ルームID</label>
+        <input id="roomIn" maxlength="32" autocomplete="off" placeholder="ルームID" class="w-full px-3 py-2 border border-neutral-300 rounded-lg text-center font-mono text-sm uppercase focus:outline-none focus:border-neutral-900">
+        <label for="nickIn" class="text-neutral-600">ニックネーム（5字以内）</label>
         <div class="flex gap-2">
-          <input id="roomIn" maxlength="5" placeholder="5桁のルームID" class="flex-1 px-3 py-1.5 border border-neutral-300 rounded-lg text-center font-mono text-sm uppercase focus:outline-none focus:border-neutral-900">
-          <button id="btnJoin" class="px-4 py-1.5 bg-neutral-800 text-white font-bold rounded-lg hover:bg-neutral-700">参加</button>
+          <input id="nickIn" maxlength="5" placeholder="ニックネーム" class="flex-1 min-w-0 px-3 py-2 border border-neutral-300 rounded-lg text-sm focus:outline-none focus:border-neutral-900">
+          <button id="btnJoin" class="px-4 py-2 bg-neutral-800 text-white font-bold rounded-lg hover:bg-neutral-700">入室</button>
         </div>
+        <p class="text-[11px] text-neutral-500 leading-relaxed">入室しただけでは観戦プールに入るだけです。下のプレイヤー枠から参加する席を選んでください。</p>
       </div>
-      <div id="roomSt" class="text-center font-bold text-neutral-600 pt-1"></div>
+      <div class="border-t border-neutral-200 pt-3 flex flex-col gap-2">
+        <div id="roomSt" class="text-center font-bold text-neutral-700 break-words"></div>
+        <div class="flex items-center justify-between"><span class="font-bold text-neutral-700">参加者プール</span><span class="text-neutral-500">着席するまでは観戦</span></div>
+        <div id="roomPool" class="flex flex-col gap-1.5"></div>
+        <div class="font-bold text-neutral-700 pt-1">プレイヤーとして参加する席</div>
+        <div id="roomSeatBtns" class="flex flex-col gap-1.5"></div>
+      </div>
     </div>
-    <div class="flex items-center justify-between pt-1">
+    <div id="soundConfig" class="flex items-center justify-between pt-1">
       <span class="text-sm font-bold text-neutral-700">効果音 (SE)</span>
       <button id="btnSound" class="px-3 py-1 text-xs font-bold rounded-full border border-neutral-300 bg-neutral-100">ON</button>
     </div>
@@ -221,11 +240,19 @@ function build(n) {
 
 // ===== 状態 =====
 let G, seenSet = new Set();
-let onlineAI = false, pendingSize = 9, mode = 'local', playerCount = 3, seats = [0, 'human', 'human', 'human', 'ai', 'ai', 'ai'];
+let onlineAI = false, pendingSize = 9, mode = 'local', playerCount = 3, seats = [0, 'human', 'human', 'human', 'human', 'human', 'human'];
+let boardView = 'host';
 let prev = -1, ptype = 'mouse', aiBusy = false;
 let peer = null, conns = [], hostConn = null, myRole = null, isHost = false, roomCode = null;
+let seatOwners = Array(7).fill(null), seatNicknames = ['', '', '', '', '', '', ''];
+let roomPool = Object.create(null), disconnectedNicknames = Object.create(null), myNickname = '';
+const LOCAL_HOST_ID = '__local_host__';
 
-function newG(n) { const count = mode === 'online' ? 3 : playerCount; return { playerCount: count, aiSeat: (mode === 'online' && onlineAI) ? 3 : 0, size: n, board: Array(P.length).fill(0), turn: 1, damage: Array(count+1).fill(0), passes: 0, over: false, result: null, phase: 'playing', dead: [], last: -1, out: Array(count+1).fill(false), seen: [], hist: [] }; }
+function newG(n) {
+  const count = playerCount, aiSeats = Array(count + 1).fill(false);
+  for (let p = 1; p <= count; p++) aiSeats[p] = seats[p] !== 'human' || (mode === 'online' && !seatOwners[p]);
+  return { playerCount: count, aiSeats, aiSeat: aiSeats.findIndex((v, i) => i > 0 && v), size: n, board: Array(P.length).fill(0), turn: 1, damage: Array(count+1).fill(0), passes: 0, over: false, result: null, phase: 'playing', dead: [], last: -1, out: Array(count+1).fill(false), seen: [], hist: [] };
+}
 function setSeen() { seenSet = new Set(G.seen); }
 function hash(a) { // cyrb53
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -243,7 +270,7 @@ function load() {
     const s = JSON.parse(sessionStorage.getItem(KEY) || 'null');
     if (!s || !s.G || ![9, 13, 19, 25].includes(s.G.size)) return false;
     build(s.G.size); if (s.G.board.length !== P.length) return false;
-    G = s.G; onlineAI = !!s.onlineAI; G.aiSeat = 0; pendingSize = s.pendingSize || G.size; seats = s.seats || seats; playerCount = Math.max(2, Math.min(6, G.playerCount || 3)); G.playerCount=playerCount; G.damage=Array.from({length:playerCount+1},(_,i)=>(G.damage||[])[i]||0); G.out=Array.from({length:playerCount+1},(_,i)=>!!((G.out||[])[i])); seats.length = 7; mode = 'local';
+    G = s.G; onlineAI = !!s.onlineAI; pendingSize = s.pendingSize || G.size; seats = s.seats || seats; seats = Array.from({length:7}, (_, i) => i === 0 ? 0 : (seats[i] === 'ai' ? 'ai' : 'human')); playerCount = Math.max(2, Math.min(6, G.playerCount || 3)); G.playerCount=playerCount; G.damage=Array.from({length:playerCount+1},(_,i)=>(G.damage||[])[i]||0); G.out=Array.from({length:playerCount+1},(_,i)=>!!((G.out||[])[i])); seats.length = 7; seatOwners = Array(7).fill(null); seatNicknames = ['', '', '', '', '', '', '']; roomPool = Object.create(null); disconnectedNicknames = Object.create(null); G.aiSeats = Array.from({length:playerCount+1},(_,i)=>i===0?false:(seats[i] !== 'human')); G.aiSeat = G.aiSeats.findIndex((v,i)=>i>0&&v); mode = 'local';
     if (THEMES[s.theme]) theme = THEMES[s.theme]; if (s.sound === false) snd.on = false;
     setSeen(); return true;
   } catch (e) { return false; }
@@ -786,11 +813,16 @@ function aiChoose() {
   if (G.passes > 0 && bestScore < (endgame ? 16 : -4)) return -1;
   return best;
 }
-const aiSeatOf = p => mode === 'online' ? G.aiSeat === p : seats[p] === 'ai';
+const aiSeatOf = p => mode === 'online' ? !!(G.aiSeats ? G.aiSeats[p] : G.aiSeat === p) : seats[p] !== 'human';
 function maybeAI() {
   if (G.over || aiBusy || (mode === 'online' && !isHost)) return;
-  if (G.phase === 'dead') { if (mode === 'local' && seats.slice(1, playerCount + 1).every(s => s === 'ai')) { finishScore(); after(); } return; }
-  if (!aiSeatOf(G.turn)) return;
+  if (G.phase === 'setup') return;
+  if (G.phase === 'dead') {
+    const allAI = Array.from({length: G.playerCount || playerCount}, (_, i) => i + 1).every(p => aiSeatOf(p));
+    if ((mode === 'local' || (mode === 'online' && isHost)) && allAI) { finishScore(); after(); }
+    return;
+  }
+  if (G.phase !== 'playing' || !aiSeatOf(G.turn)) return;
   aiBusy = true; $('aiOv').classList.remove('hidden');
   setTimeout(() => {
     aiBusy = false; $('aiOv').classList.add('hidden');
@@ -805,7 +837,7 @@ function maybeAI() {
 // ===== 入力 =====
 const $ = id => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d');
-function mine() { return mode === 'online' ? G.turn === myRole : seats[G.turn] === 'human'; }
+function mine() { return mode === 'online' ? Number.isInteger(myRole) && G.turn === myRole && !aiSeatOf(myRole) : seats[G.turn] === 'human'; }
 function metrics() {
   const w = cv.getBoundingClientRect().width, pad = w * 0.07, cell = (w - pad * 2) / (2 * (SIDE - 1));
   return { w, cell, pos: i => [w / 2 + cell * (P[i][0] + P[i][1] / 2), w / 2 + cell * P[i][1] * 0.866] };
@@ -886,12 +918,15 @@ function undo() {
 }
 function after() { updateUI(); save(); sync(); maybeAI(); }
 function dotHtml(p) { return `<span class="dot" style="background:${playerFill(p)};border-color:${playerStroke(p)}"></span>`; }
+function playerDisplayName(p) { const nick = mode === 'online' ? (seatNicknames[p] || '') : ''; return nick ? `${nick}（${playerName(p)}）` : playerName(p); }
 function updateUI() {
   const t = G.turn;
-  $('turnInd').innerHTML = `${dotHtml(t)}${playerName(t)} (${t}P)${aiSeatOf(t) ? ' AI' : ''}${mode === 'online' && t === myRole ? ' ★あなた' : ''}`;
-  $('dmg').innerHTML = Array.from({length:G.playerCount||3},(_,i)=>i+1).map(p => `<span>${dotHtml(p)}${playerName(p)} <strong>${G.board.filter(v => v === p).length}</strong>${G.out[p] ? '(投)' : ''}</span>`).join('');
-  $('modeBadge').textContent = mode === 'online' ? `オンライン${G.aiSeat ? ' 人人AI' : ' 人人人'} (${myRole ? playerName(myRole) : '-'})` : 'ローカル ' + seats.slice(1,playerCount+1).map(s => s === 'ai' ? 'AI' : '人').join('');
-  if (mode === 'online' && !isHost) $('aiOv').classList.toggle('hidden', !(G.aiSeat && G.turn === G.aiSeat && !G.over && G.phase === 'playing'));
+  $('turnInd').innerHTML = `${dotHtml(t)}${playerDisplayName(t)} (${t}P)${aiSeatOf(t) ? ' AI' : ''}${mode === 'online' && t === myRole ? ' ★あなた' : ''}`;
+  const countForGrid = G.playerCount || 3;
+  $('dmg').style.gridTemplateColumns = `repeat(${Math.ceil(countForGrid / 2)}, minmax(0, 1fr))`;
+  $('dmg').innerHTML = Array.from({length:countForGrid},(_,i)=>i+1).map(p => `<span class="min-w-0 whitespace-nowrap text-[11px] sm:text-xs">${dotHtml(p)}${playerDisplayName(p)} <strong>${G.board.filter(v => v === p).length}</strong>${G.out[p] ? '(投)' : ''}</span>`).join('');
+  $('modeBadge').textContent = mode === 'online' ? `オンライン ${myRole ? playerDisplayName(myRole) : 'プール / 観戦'}` : 'ローカル ' + seats.slice(1,playerCount+1).map(s => s === 'ai' ? 'AI' : '人間').join('・');
+  if (mode === 'online' && !isHost) $('aiOv').classList.toggle('hidden', !(aiSeatOf(G.turn) && !G.over && G.phase === 'playing'));
   $('btnUndo').disabled = !canUndo();
   $('bnDead').classList.toggle('hidden', G.phase !== 'dead');
   $('bnResult').classList.toggle('hidden', !G.over);
@@ -909,25 +944,106 @@ $('btnUndoOk').onclick = () => { $('undoModal').classList.add('hidden'); undo();
 $('btnDeadCancel').onclick = () => { snd.click(); G.phase = 'playing'; G.passes = 0; G.dead = []; after(); };
 $('btnDeadOk').onclick = () => { snd.click(); finishScore(); after(); };
 
-// 設定
-function syncSettings() {
-  document.querySelectorAll('#playerCountBtns .opt').forEach(b => b.classList.toggle('on', +b.dataset.count === playerCount));
-  document.querySelectorAll('#sizeBtns .opt').forEach(b => b.classList.toggle('on', +b.dataset.v === pendingSize));
-  document.querySelectorAll('#modeBtns .opt').forEach(b => b.classList.toggle('on', b.dataset.v === mode));
-  $('seatBox').classList.toggle('hidden', mode !== 'local'); $('onlineBox').classList.toggle('hidden', mode !== 'online');
-  $('seatBtns').innerHTML = '';
-  Array.from({length:playerCount},(_,i)=>i+1).forEach(p => { const b = document.createElement('button'); b.className = 'opt' + (seats[p] === 'ai' ? ' on' : ''); b.innerHTML = `${dotHtml(p)}${playerName(p)}: ${seats[p] === 'ai' ? 'AI' : '人'}`; b.onclick = () => { snd.click(); seats[p] = seats[p] === 'ai' ? 'human' : 'ai'; syncSettings(); save(); }; $('seatBtns').appendChild(b); });
-  document.querySelectorAll('#onlineTypeBtns .opt').forEach(b => b.classList.toggle('on', (b.dataset.v === 'hha') === onlineAI));
-  $('btnSound').textContent = snd.on ? 'ON' : 'OFF'; $('btnSound').classList.toggle('on', snd.on);
+// ===== プレイヤー設定 =====
+const SEAT_MODES = ['human', 'ai'];
+const SEAT_LABELS = { human: '人間', ai: 'AI' };
+function canManageRoom() { return mode === 'local' || !roomCode || isHost; }
+function isMatchRunning() { return !!(G && G.phase !== 'setup' && !G.over); }
+function setSeatAIFlag(p) {
+  if (!G || p < 1 || p > (G.playerCount || 0) || !G.aiSeats) return;
+  if (mode === 'online') G.aiSeats[p] = seats[p] !== 'human' || !seatOwners[p];
+  else G.aiSeats[p] = seats[p] !== 'human';
+  G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v);
 }
-document.querySelectorAll('#playerCountBtns .opt').forEach(b => b.onclick = () => { if(mode==='online') return; playerCount=+b.dataset.count; seats=[0,...Array.from({length:6},(_,i)=>seats[i+1]||'ai')]; syncSettings(); save(); });
-document.querySelectorAll('#sizeBtns .opt').forEach(b => b.onclick = () => { snd.click(); pendingSize = +b.dataset.v; syncSettings(); save(); });
+function releaseSeat(p) {
+  const owner = seatOwners[p];
+  if (owner && roomPool[owner]) roomPool[owner].seat = null;
+  if (owner === LOCAL_HOST_ID && myRole === p) myRole = null;
+  seatOwners[p] = null;
+  seatNicknames[p] = '';
+}
+function setSeatMode(p, nextMode, quiet=false) {
+  if (!canManageRoom() || p < 1 || p > 6 || !SEAT_MODES.includes(nextMode)) return;
+  if (seats[p] === nextMode) return;
+  if (nextMode === 'ai') releaseSeat(p);
+  seats[p] = nextMode;
+  setSeatAIFlag(p);
+  if (!quiet) {
+    snd.click(); syncSettings();
+    if (mode === 'online' && isHost) sync();
+    after();
+  }
+}
+function setAllSeatModes(value) {
+  if (!canManageRoom()) return;
+  for (let p = 1; p <= playerCount; p++) setSeatMode(p, value, true);
+  snd.click(); syncSettings();
+  if (mode === 'online' && isHost) sync();
+  after();
+}
+function syncSettings() {
+  document.querySelectorAll('#playerCountBtns .opt').forEach(b => {
+    b.classList.toggle('on', +b.dataset.count === playerCount);
+    b.disabled = mode === 'online' && !!roomCode && !isHost;
+  });
+  document.querySelectorAll('#sizeBtns .opt').forEach(b => {
+    b.classList.toggle('on', +b.dataset.v === pendingSize);
+    b.disabled = mode === 'online' && !!roomCode && !isHost;
+  });
+  document.querySelectorAll('#modeBtns .opt').forEach(b => b.classList.toggle('on', b.dataset.v === mode));
+  $('onlineBox').classList.toggle('hidden', mode !== 'online');
+  const participantView = mode === 'online' && boardView === 'participant';
+  $('onlineRoleConfig').classList.toggle('hidden', mode !== 'online');
+  $('seatBox').classList.toggle('hidden', participantView);
+  ['boardSizeConfig', 'playerCountConfig', 'soundConfig'].forEach(id => $(id).classList.toggle('hidden', participantView));
+  $('btnNew').classList.toggle('hidden', participantView);
+  $('hostRoomSection').classList.toggle('hidden', participantView);
+  $('joinRoomSection').classList.toggle('hidden', !participantView);
+  $('btnHostBoard').classList.toggle('on', !participantView);
+  $('btnParticipantBoard').classList.toggle('on', participantView);
+  $('seatBtns').innerHTML = '';
+  for (let p = 1; p <= playerCount; p++) {
+    const row = document.createElement('div'); row.className = 'flex items-center gap-1.5';
+    const label = document.createElement('span'); label.className = 'w-16 shrink-0 text-xs font-bold text-neutral-700';
+    label.textContent = `${p}P ${playerName(p)}`; row.appendChild(label);
+    for (const value of SEAT_MODES) {
+      const b = document.createElement('button'); b.type = 'button';
+      b.className = 'opt flex-1' + (seats[p] === value ? ' on' : '');
+      b.textContent = SEAT_LABELS[value];
+      b.disabled = !canManageRoom();
+      if (seats[p] === value) b.setAttribute('aria-pressed', 'true');
+      b.onclick = () => setSeatMode(p, value);
+      row.appendChild(b);
+    }
+    $('seatBtns').appendChild(row);
+  }
+  document.querySelectorAll('[data-bulk]').forEach(b => b.disabled = !canManageRoom());
+  $('btnSound').textContent = snd.on ? 'ON' : 'OFF'; $('btnSound').classList.toggle('on', snd.on);
+  $('btnCreate').disabled = !!(mode === 'online' && roomCode && !isHost);
+  $('btnJoin').disabled = !!(mode === 'online' && isHost);
+  document.querySelectorAll('[data-board-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.boardView === boardView)));
+  renderRoomUI();
+}
+document.querySelectorAll('#playerCountBtns .opt').forEach(b => b.onclick = () => {
+  if (mode === 'online' && roomCode && !isHost) return;
+  snd.click(); const old = playerCount; playerCount = +b.dataset.count;
+  for (let p = old + 1; p <= playerCount; p++) if (!seats[p]) seats[p] = 'human';
+  for (let p = playerCount + 1; p <= 6; p++) if (seatOwners[p]) releaseSeat(p);
+  syncSettings(); save(); if (mode === 'online' && isHost) sync();
+});
+document.querySelectorAll('#sizeBtns .opt').forEach(b => b.onclick = () => {
+  if (mode === 'online' && roomCode && !isHost) return;
+  snd.click(); pendingSize = +b.dataset.v; syncSettings(); save(); if (mode === 'online' && isHost) sync();
+});
 document.querySelectorAll('#modeBtns .opt').forEach(b => b.onclick = () => {
-  snd.click(); if (mode === 'online' && b.dataset.v !== 'online') { closePeer(); $('roomSt').textContent = ''; }
+  snd.click();
+  if (mode === b.dataset.v) return;
+  if (mode === 'online') closePeer();
   mode = b.dataset.v; syncSettings(); updateUI();
 });
-document.querySelectorAll('#onlineTypeBtns .opt').forEach(b => b.onclick = () => { snd.click(); onlineAI = b.dataset.v === 'hha'; syncSettings(); save(); });
-document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { snd.click(); seats = [0, ...Array.from({length:playerCount},(_,i)=>[...b.dataset.p][i%3] === 'h' ? 'human' : 'ai')]; syncSettings(); save(); });
+document.querySelectorAll('[data-bulk]').forEach(b => b.onclick = () => setAllSeatModes(b.dataset.bulk));
+$('btnHostBoard').onclick = () => { boardView = 'host'; syncSettings(); };
+$('btnParticipantBoard').onclick = () => { boardView = 'participant'; syncSettings(); };
 $('btnSound').onclick = () => { snd.on = !snd.on; syncSettings(); snd.click(); save(); };
 $('btnOpenSettings').onclick = () => { snd.click(); syncSettings(); $('setModal').classList.remove('hidden'); };
 $('btnOpenRules').onclick = () => { snd.click(); $('rulesModal').classList.remove('hidden'); };
@@ -935,7 +1051,8 @@ $('btnCloseRules').onclick = () => $('rulesModal').classList.add('hidden');
 $('btnRulesDone').onclick = () => $('rulesModal').classList.add('hidden');
 $('rulesModal').addEventListener('click', e => { if (e.target === $('rulesModal')) $('rulesModal').classList.add('hidden'); });
 $('btnCloseSettings').onclick = () => $('setModal').classList.add('hidden');
-$('btnNew').onclick = () => { snd.click(); $('setModal').classList.add('hidden'); reset(); };
+$('btnNew').onclick = () => { snd.click(); if (reset()) $('setModal').classList.add('hidden'); };
+
 function applyTheme(th) {
   theme = th; const s = document.body.style;
   s.setProperty('--bg', th.bg); s.setProperty('--tx', th.tx); s.setProperty('--card', th.card); s.setProperty('--bd', th.bd);
@@ -952,74 +1069,315 @@ function buildThemes() {
   });
 }
 function reset() {
-  if (mode === 'online' && !isHost) { $('roomSt').textContent = '新規対局はホストが開始します'; return; }
-  build(pendingSize); G = newG(pendingSize); setSeen(); prev = -1; aiBusy = false; $('aiOv').classList.add('hidden');
-  $('resModal').classList.add('hidden'); after();
+  if (mode === 'online' && !isHost) { $('roomSt').textContent = '新規対局はホストが開始します'; return false; }
+  build(pendingSize); G = newG(pendingSize);
+  // 未着席の人間席は対局中だけAIが代打し、席は後から着席可能なまま維持する。
+  if (mode === 'online') {
+    G.aiSeats = Array.from({length: playerCount + 1}, (_, p) => p > 0 && (seats[p] === 'ai' || !seatOwners[p]));
+    G.aiSeat = G.aiSeats.findIndex((v, p) => p > 0 && v);
+  }
+  G.phase = 'playing'; setSeen(); prev = -1; aiBusy = false; $('aiOv').classList.add('hidden');
+  $('resModal').classList.add('hidden'); after(); return true;
 }
 
-// ===== オンライン (PeerJS / WebRTC) =====
+// ===== オンライン（PeerJS / WebRTC）：入室後はプール、着席は別操作 =====
 const PFX = 'hexago-';
+const BLOCKED_NICK_WORDS = ['くそ', 'しね', '死ね', '殺す', 'ばか', 'バカ', 'うんこ', 'ちんこ', 'まんこ', 'fuck', 'shit', 'bitch', 'asshole'];
+function validateNickname(raw) {
+  const value = String(raw || '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  if (!value) return { ok: false, message: 'ニックネームを入力してください。' };
+  if ([...value].length > 5) return { ok: false, message: 'ニックネームは5字以内にしてください。' };
+  if (!/^[\p{L}\p{N} _.-]+$/u.test(value)) return { ok: false, message: 'ニックネームには文字・数字・空白・._- だけ使えます。' };
+  const normalized = value.toLowerCase().replace(/[\s._-]/g, '');
+  if (BLOCKED_NICK_WORDS.some(word => normalized.includes(word.normalize('NFKC').toLowerCase().replace(/[\s._-]/g, ''))))
+    return { ok: false, message: 'そのニックネームは使用できません。別の名前を入力してください。' };
+  return { ok: true, value };
+}
+function validateRoomId(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return { ok: false, message: 'ルームIDを入力してください。' };
+  if (value.length > 32 || !/^[A-Za-z0-9_-]+$/.test(value)) return { ok: false, message: 'ルームIDは英数字・ハイフン・アンダースコアの1〜32文字で指定してください。' };
+  return { ok: true, value: value.toUpperCase() };
+}
+function resetRoomData() {
+  seatOwners = Array(7).fill(null); seatNicknames = ['', '', '', '', '', '', ''];
+  roomPool = Object.create(null); disconnectedNicknames = Object.create(null);
+}
 function closePeer() {
   conns.forEach(c => { try { c.close(); } catch (e) { } }); conns = [];
   if (hostConn) { try { hostConn.close(); } catch (e) { } hostConn = null; }
   if (peer) { try { peer.destroy(); } catch (e) { } peer = null; }
-  myRole = null; isHost = false; roomCode = null;
+  myRole = null; isHost = false; roomCode = null; myNickname = '';
+  resetRoomData();
+  if ($('roomSt')) $('roomSt').textContent = '';
+  if ($('roomPool')) $('roomPool').innerHTML = '';
+  if ($('roomSeatBtns')) $('roomSeatBtns').innerHTML = '';
+}
+function roomSnapshot() {
+  return { t: 'snapshot', G, pendingSize, playerCount, seats: seats.slice(), seatOwners: seatOwners.slice(), seatNicknames: seatNicknames.slice(), roomPool: JSON.parse(JSON.stringify(roomPool)), disconnectedNicknames: { ...disconnectedNicknames }, roomCode };
+}
+function sendSnapshot(to=null) {
+  if (!isHost) return;
+  const msg = roomSnapshot();
+  if (to && to.open) to.send(msg);
+  else conns.forEach(c => { if (c.open) c.send(msg); });
+  renderRoomUI();
 }
 function sync(except) {
   if (mode !== 'online') return;
-  const msg = { t: 'state', G };
-  if (isHost) conns.forEach(c => { if (c !== except && c.open) c.send(msg); });
-  else if (hostConn && hostConn.open) hostConn.send(msg);
+  if (isHost) {
+    const msg = roomSnapshot();
+    conns.forEach(c => { if (c !== except && c.open) c.send(msg); });
+    renderRoomUI();
+  } else if (hostConn && hostConn.open) hostConn.send({ t: 'state', G });
 }
-function recv(data, from) {
-  if (data.t === 'role') { myRole = data.role; $('roomSt').textContent = `参加完了！ あなた: ${playerName(myRole)}`; updateUI(); return; }
-  if (data.t !== 'state') return;
-  const wasOver = G.over; G = data.G;
-  if (G.size !== SIDE * 2 - 1) { build(G.size); pendingSize = G.size; resizeCanvas(); }
-  setSeen(); prev = -1;
-  if (G.over && !wasOver && G.result) showResult();
-  if (!G.over) $('resModal').classList.add('hidden');
-  updateUI(); save();
-  if (isHost) { sync(from); maybeAI(); }
+function setRemoteRoleFromSnapshot() {
+  if (!peer || isHost) return;
+  myRole = null;
+  for (let p = 1; p <= Math.min(6, G?.playerCount || playerCount); p++) if (seatOwners[p] === peer.id) { myRole = p; break; }
+}
+function applySnapshot(data) {
+  const wasOver = !!G?.over;
+  if (data.G) G = data.G;
+  if (data.playerCount) playerCount = Math.max(2, Math.min(6, data.playerCount));
+  if (data.pendingSize) pendingSize = data.pendingSize;
+  if (Array.isArray(data.seats)) seats = data.seats.slice(0, 7);
+  while (seats.length < 7) seats.push('human');
+  seats = Array.from({length:7}, (_, i) => i === 0 ? 0 : (seats[i] === 'ai' ? 'ai' : 'human'));
+  if (Array.isArray(data.seatOwners)) seatOwners = data.seatOwners.slice(0, 7);
+  if (Array.isArray(data.seatNicknames)) seatNicknames = data.seatNicknames.slice(0, 7);
+  roomPool = Object.assign(Object.create(null), data.roomPool || {});
+  disconnectedNicknames = Object.assign(Object.create(null), data.disconnectedNicknames || {});
+  roomCode = data.roomCode || roomCode;
+  if (G && G.size !== SIDE * 2 - 1) { build(G.size); resizeCanvas(); }
+  if (G && !G.aiSeats) G.aiSeats = Array.from({length: (G.playerCount || 3) + 1}, (_, p) => p > 0 && seats[p] !== 'human');
+  if (G) G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v);
+  setRemoteRoleFromSnapshot(); setSeen(); prev = -1;
+  if (G?.over && !wasOver && G.result) showResult();
+  if (!G?.over) $('resModal').classList.add('hidden');
+  syncSettings(); updateUI(); save();
+}
+function assignSeat(ownerId, p, nickname) {
+  if (!roomPool[ownerId] || p < 1 || p > playerCount || seatOwners[p]) return false;
+  if (roomPool[ownerId].seat && roomPool[ownerId].seat !== p) return false;
+  if (seats[p] === 'ai' && (disconnectedNicknames[p] || '').toLowerCase() !== String(nickname || '').toLowerCase()) return false;
+  seatOwners[p] = ownerId; seatNicknames[p] = nickname; seats[p] = 'human';
+  roomPool[ownerId].seat = p; delete disconnectedNicknames[p];
+  if (G && p <= G.playerCount && G.aiSeats) { G.aiSeats[p] = false; G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v); }
+  return true;
+}
+function handleHostMessage(data, c) {
+  if (!isHost || !data || !c) return;
+  if (data.t === 'hello') {
+    const rawName = String(data.nickname || '').trim();
+    const checked = rawName ? validateNickname(rawName) : { ok: true, value: '__AUTO_NICK__' };
+    if (!checked.ok) { c.send({ t: 'notice', message: checked.message }); c.close(); return; }
+    const nickname = checked.value === '__AUTO_NICK__' ? `${Object.keys(roomPool).length + 1}p` : checked.value;
+    roomPool[c.peer] = { nickname, seat: null };
+    const reconnectSeat = Array.from({length: Math.min(6, playerCount)}, (_, i) => i + 1)
+      .find(p => !seatOwners[p] && disconnectedNicknames[p] && disconnectedNicknames[p].toLowerCase() === nickname.toLowerCase());
+    if (reconnectSeat) assignSeat(c.peer, reconnectSeat, nickname);
+    sendSnapshot();
+    return;
+  }
+  if (data.t === 'claim') {
+    const p = Number(data.seat), item = roomPool[c.peer];
+    if (!item || item.seat || seatOwners.indexOf(c.peer) > 0 || !Number.isInteger(p) || p < 1 || p > playerCount || seatOwners[p]) return;
+    if (seats[p] === 'ai' && (disconnectedNicknames[p] || '').toLowerCase() !== item.nickname.toLowerCase()) return;
+    if (assignSeat(c.peer, p, item.nickname)) { sendSnapshot(); after(); }
+    return;
+  }
+  if (data.t === 'release') {
+    const p = Number(data.seat), item = roomPool[c.peer];
+    if (!item || !Number.isInteger(p) || p < 1 || p > playerCount || seatOwners[p] !== c.peer || item.seat !== p) return;
+    vacateSeat(p, c.peer, true);
+    sendSnapshot(); after();
+    return;
+  }
+  if (data.t === 'state' && data.G && Number.isInteger(seatOwners.indexOf(c.peer))) {
+    const role = seatOwners.indexOf(c.peer);
+    if (role < 1 || role > (G.playerCount || 0)) return;
+    const candidate = data.G;
+    const last = candidate.hist && candidate.hist[candidate.hist.length - 1];
+    const deadReview = G.phase === 'dead' && ['dead', 'playing', 'ended'].includes(candidate.phase) && candidate.size === G.size && candidate.playerCount === G.playerCount;
+    if (G.turn !== role && !deadReview) return;
+    const validMove = G.turn === role && !!last && last.by === role && candidate.playerCount === G.playerCount && candidate.size === G.size;
+    const validResign = G.turn === role && !!candidate.out?.[role] && !G.out?.[role];
+    if (!validMove && !validResign && !deadReview) return;
+    G = candidate; setSeen(); prev = -1;
+    if (G.size !== SIDE * 2 - 1) { build(G.size); resizeCanvas(); }
+    if (G.over && G.result) showResult();
+    updateUI(); save(); sendSnapshot(); maybeAI();
+  }
+}
+function handleDisconnect(c) {
+  conns = conns.filter(x => x !== c);
+  if (!isHost || !c?.peer) return;
+  const nickname = roomPool[c.peer]?.nickname || '';
+  const role = seatOwners.indexOf(c.peer);
+  if (role > 0) {
+    seatOwners[role] = null;
+    disconnectedNicknames[role] = nickname;
+    seatNicknames[role] = nickname;
+    seats[role] = 'ai';
+    if (G && role <= G.playerCount && G.aiSeats) { G.aiSeats[role] = true; G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v); }
+  }
+  delete roomPool[c.peer];
+  if (G && G.phase === 'playing' && G.aiSeats?.[G.turn]) { after(); }
+  else { syncSettings(); updateUI(); sync(); }
+  $('roomSt').textContent = nickname ? `${nickname} が切断されました。該当席は一時的にAIが代行します。` : '参加者が切断されました。';
 }
 function wire(c) {
-  c.on('data', d => recv(d, c));
-  c.on('close', () => { conns = conns.filter(x => x !== c); $('roomSt').textContent = '相手が切断しました'; });
+  c.on('data', d => {
+    if (isHost) handleHostMessage(d, c);
+    else if (d?.t === 'snapshot') applySnapshot(d);
+    else if (d?.t === 'notice') $('roomSt').textContent = d.message || '部屋からの通知があります。';
+  });
+  c.on('close', () => {
+    if (isHost) handleDisconnect(c);
+    else { $('roomSt').textContent = '部屋との接続が切れました。再入室すると復帰できます。'; }
+  });
+  c.on('error', () => { $('roomSt').textContent = '通信エラーが発生しました。'; });
+}
+function claimLocalHostSeat(p) {
+  const item = roomPool[LOCAL_HOST_ID];
+  if (!isHost || !item || myRole || seatOwners[p]) return;
+  if (seats[p] === 'ai' && (disconnectedNicknames[p] || '').toLowerCase() !== item.nickname.toLowerCase()) return;
+  if (assignSeat(LOCAL_HOST_ID, p, item.nickname)) { myRole = p; syncSettings(); updateUI(); sync(); }
+}
+function vacateSeat(p, ownerId, voluntary=true) {
+  const item = roomPool[ownerId];
+  const nickname = seatNicknames[p] || item?.nickname || disconnectedNicknames[p] || '';
+  if (item) item.seat = null;
+  seatOwners[p] = null;
+  if (ownerId === LOCAL_HOST_ID) myRole = null;
+  // 自発的な退席では席を再募集し、切断時はAI席として保護する。
+  seats[p] = voluntary ? 'human' : 'ai';
+  if (voluntary) { delete disconnectedNicknames[p]; seatNicknames[p] = ''; }
+  else { if (nickname) disconnectedNicknames[p] = nickname; seatNicknames[p] = nickname; }
+  if (G && p <= G.playerCount && G.aiSeats) {
+    G.aiSeats[p] = true;
+    G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v);
+  }
+}
+function leaveMySeat(p) {
+  if (!myRole || myRole !== p) return;
+  snd.click();
+  if (isHost) {
+    if (seatOwners[p] !== LOCAL_HOST_ID) return;
+    vacateSeat(p, LOCAL_HOST_ID, true);
+    syncSettings(); updateUI(); after();
+  } else if (hostConn && hostConn.open) {
+    hostConn.send({ t: 'release', seat: p });
+    $('roomSt').textContent = '退席しています…';
+  }
+}
+function renderRoomUI() {
+  const poolEl = $('roomPool'), seatEl = $('roomSeatBtns'), statusEl = $('roomSt');
+  if (!poolEl || !seatEl || !statusEl) return;
+  poolEl.innerHTML = ''; seatEl.innerHTML = '';
+  const hostMember = roomPool[LOCAL_HOST_ID];
+  if (roomCode) statusEl.textContent = `ルームID：${roomCode}｜ホスト：${hostMember?.nickname || (isHost ? myNickname : '接続中')}`;
+  else if (mode === 'online' && hostConn) statusEl.textContent = '接続中…';
+  else if (mode === 'online' && !peer) statusEl.textContent = 'ホストボードで部屋を作成するか、参加者ボードでIDを入力してください。';
+  const entries = Object.entries(roomPool);
+  if (!entries.length) {
+    const empty = document.createElement('div'); empty.className = 'text-neutral-500'; empty.textContent = 'まだ参加者はいません。'; poolEl.appendChild(empty);
+  }
+  for (const [id, member] of entries) {
+    const row = document.createElement('div'); row.className = 'flex items-center justify-between gap-2 rounded-lg bg-white border border-neutral-200 px-2.5 py-2';
+    const name = document.createElement('span'); name.className = 'font-semibold break-words';
+    name.textContent = `${member.nickname || '参加者'}${id === LOCAL_HOST_ID ? '（ホスト）' : ''}`;
+    const state = document.createElement('span'); state.className = 'text-neutral-500 shrink-0'; state.textContent = member.seat ? `${member.seat}Pとして参加中` : 'プール';
+    row.append(name, state); poolEl.appendChild(row);
+  }
+  const activeCount = isMatchRunning() ? Math.min(playerCount, G.playerCount || playerCount) : playerCount;
+  const ownId = isHost ? LOCAL_HOST_ID : peer?.id;
+  for (let p = 1; p <= activeCount; p++) {
+    const row = document.createElement('div'); row.className = 'flex items-center justify-between gap-2 rounded-lg bg-white border border-neutral-200 px-2.5 py-2';
+    const label = document.createElement('span'); label.className = 'font-semibold min-w-0';
+    const ownerId = seatOwners[p];
+    const seatName = seatNicknames[p] ? `${playerName(p)}・${seatNicknames[p]}` : playerName(p);
+    label.textContent = `${p}P ${seatName}：${ownerId ? '参加中' : (disconnectedNicknames[p] ? '切断・AI代行中' : SEAT_LABELS[seats[p]] || '人間')}`;
+    row.appendChild(label);
+    if (ownerId === ownId && myRole === p) {
+      const leave = document.createElement('button'); leave.type = 'button'; leave.className = 'opt shrink-0'; leave.textContent = '退席する';
+      leave.onclick = () => leaveMySeat(p); row.appendChild(leave);
+    } else if (!ownerId && (seats[p] !== 'ai' || disconnectedNicknames[p]) && (mode !== 'online' || !!peer || !!hostConn)) {
+      const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'opt shrink-0'; btn.textContent = 'この席で参加';
+      const alreadySeated = Number.isInteger(myRole) && myRole > 0;
+      btn.disabled = alreadySeated;
+      if (alreadySeated) btn.title = 'すでに席に参加しています。先に退席してください。';
+      else if (isHost) btn.onclick = () => claimLocalHostSeat(p);
+      else if (hostConn && hostConn.open) btn.onclick = () => hostConn.send({ t: 'claim', seat: p });
+      else btn.disabled = true;
+      row.appendChild(btn);
+    }
+    seatEl.appendChild(row);
+  }
 }
 $('btnCreate').onclick = () => {
-  snd.click(); closePeer(); $('roomSt').textContent = 'ルーム作成中...';
-  const code = Math.random().toString(36).substring(2, 7).toUpperCase();
-  peer = new Peer(PFX + code.toLowerCase(), { debug: 0 });
-  peer.on('open', () => {
-    isHost = true; myRole = 1; roomCode = code; $('roomIn').value = code;
-    $('roomSt').textContent = `ルームID: ${code} (参加者 0/${onlineAI ? 1 : 2})`;
-    peer.on('connection', c => {
-      if (conns.length >= (onlineAI ? 1 : 2)) { c.close(); return; }
-      conns.push(c); wire(c);
-      c.on('open', () => {
-        c.send({ t: 'role', role: conns.length + 1 });
-        $('roomSt').textContent = `ルームID: ${code} (参加者 ${conns.length}/${onlineAI ? 1 : 2})`;
-        build(pendingSize); G = newG(pendingSize); setSeen(); prev = -1; $('resModal').classList.add('hidden'); updateUI(); save(); sync();
-      });
-    });
+  snd.click();
+  const rawHostName = $('hostNickname').value.trim();
+  const checkedName = rawHostName ? validateNickname(rawHostName) : { ok: true, value: 'host' };
+  if (!checkedName.ok) { $('roomSt').textContent = checkedName.message; return; }
+  const checkedId = validateRoomId($('hostRoomId').value);
+  if (!checkedId.ok) { $('roomSt').textContent = checkedId.message; return; }
+  const code = checkedId.value;
+  if (isHost && roomCode && roomCode.toUpperCase() === code) {
+    $('roomSt').textContent = 'このIDは現在の部屋で使用中です。別のIDを指定してください。'; return;
+  }
+  $('roomSt').textContent = `ルームID「${code}」を確認中…`;
+  $('btnCreate').disabled = true;
+  // 既存の参加状態を維持したまま指定IDを先に確保し、重複時は現在の接続を壊さない。
+  const candidate = new Peer(PFX + code.toLowerCase(), { debug: 0 });
+  let completed = false;
+  candidate.on('open', () => {
+    if (completed) return; completed = true;
+    closePeer();
+    peer = candidate; mode = 'online'; boardView = 'host'; isHost = true; roomCode = code; myNickname = checkedName.value;
+    if (!G) { build(pendingSize); G = newG(pendingSize); G.phase = 'setup'; setSeen(); }
+    if (G.phase !== 'setup') { playerCount = G.playerCount; pendingSize = G.size; }
+    if (G && G.aiSeats) { for (let p = 1; p <= G.playerCount; p++) G.aiSeats[p] = seats[p] !== 'human' || !seatOwners[p]; G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v); }
+    roomPool[LOCAL_HOST_ID] = { nickname: myNickname, seat: null };
+    $('hostNickname').value = myNickname; $('hostRoomId').value = code; $('roomIn').value = code;
+    candidate.on('connection', c => { conns.push(c); wire(c); });
+    $('btnCreate').disabled = false;
+    syncSettings(); updateUI(); sendSnapshot(); save(); maybeAI();
   });
-  peer.on('error', e => { $('roomSt').textContent = e.type === 'unavailable-id' ? 'IDが重複しました。もう一度お試しください' : '部屋作成エラー'; });
+  candidate.on('error', e => {
+    if (completed) return;
+    completed = true;
+    try { candidate.destroy(); } catch (err) { }
+    $('btnCreate').disabled = false;
+    $('roomSt').textContent = e.type === 'unavailable-id' ? 'そのルームIDは既に使用されています。別のIDを指定してください。' : '部屋作成エラー。IDや通信状態を確認してください。';
+  });
 };
 $('btnJoin').onclick = () => {
-  snd.click(); const code = $('roomIn').value.trim().toUpperCase();
-  if (code.length !== 5) { $('roomSt').textContent = '5桁のIDを入力してください'; return; }
-  closePeer(); $('roomSt').textContent = '接続中...';
+  snd.click();
+  const checkedId = validateRoomId($('roomIn').value);
+  const rawNick = $('nickIn').value.trim();
+  const checked = rawNick ? validateNickname(rawNick) : { ok: true, value: '' };
+  if (!checkedId.ok) { $('roomSt').textContent = checkedId.message; return; }
+  if (!checked.ok) { $('roomSt').textContent = checked.message; return; }
+  const code = checkedId.value;
+  closePeer(); mode = 'online'; boardView = 'participant'; myNickname = checked.value; $('roomSt').textContent = '接続中…'; syncSettings(); updateUI();
   peer = new Peer({ debug: 0 });
-  peer.on('open', () => { hostConn = peer.connect(PFX + code.toLowerCase(), { reliable: true }); wire(hostConn); hostConn.on('open', () => { $('roomSt').textContent = '参加完了！ 対局開始を待っています'; }); });
-  peer.on('error', e => { $('roomSt').textContent = e.type === 'peer-unavailable' ? '部屋が見つかりません' : '接続エラーが発生しました'; });
+  peer.on('open', () => {
+    hostConn = peer.connect(PFX + code.toLowerCase(), { reliable: true }); wire(hostConn);
+    hostConn.on('open', () => { roomCode = code; hostConn.send({ t: 'hello', nickname: myNickname }); renderRoomUI(); syncSettings(); });
+  });
+  peer.on('error', e => { $('roomSt').textContent = e.type === 'peer-unavailable' ? '部屋が見つかりません。IDを確認してください。' : '接続エラーが発生しました。'; });
 };
 window.addEventListener('pagehide', () => { save(); if (mode === 'online') closePeer(); });
 
 // ===== 起動 =====
 window.onload = () => {
   buildThemes();
-  if (!load()) { build(9); G = newG(9); setSeen(); }
+  const restored = load();
+  if (!restored) { build(9); G = newG(9); G.phase = 'setup'; setSeen(); }
   applyTheme(theme); syncSettings();
+  if (!restored) $('setModal').classList.remove('hidden');
   if (G.over && G.result) $('bnResult').classList.remove('hidden');
   resizeCanvas(); updateUI(); maybeAI();
 };

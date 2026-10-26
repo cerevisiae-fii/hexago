@@ -417,7 +417,11 @@ function aiChoose() {
   const b = G.board, p = G.turn, radius = SIDE - 1;
   const occupied = b.reduce((n, v) => n + (v ? 1 : 0), 0);
   const fill = occupied / b.length;
-  const opening = fill < 0.30, endgame = fill > 0.62;
+  // 10手目以降は盤面の占有率にかかわらず中盤の展開評価へ移る。
+  const moveNumber = Math.max((G.seen || []).length, occupied) + 1;
+  const opening = moveNumber < 10 && fill < 0.30;
+  const midgame = moveNumber >= 10;
+  const endgame = fill > 0.62;
   // プレイヤーごとに性格を固定。1=堅実、2=大模様、3=攻撃型。
   const style = p % 3 === 1 ? 'territory' : p % 3 === 2 ? 'framework' : 'fighter';
   const { id, regs } = regionInfo(b);
@@ -443,38 +447,66 @@ function aiChoose() {
     return {ei, score, own, enemy};
   });
   edgeStats.sort((a,b)=>b.score-a.score);
-  const preferredEdges = [edgeStats[0].ei];
-  // 2辺目は1辺目と同程度に有望な場合だけ採用し、展開範囲を広げすぎない。
-  if (edgeStats.length>1 && edgeStats[1].score >= edgeStats[0].score-2.2) preferredEdges.push(edgeStats[1].ei);
+  // 序盤は1〜2辺だけに偏らず、上位4辺を候補にして盤面の複数方向へ布石を広げる。
+  // 上位辺の評価差は後段のソフトな加点で扱い、展開先を固定しすぎない。
+  const preferredEdges = edgeStats.slice(0, 4).map(e => e.ei);
   const preferredCoords = preferredEdges.map(ei=>edgeDefs[ei].coord);
+  // 六つの頂点から3線ずつ内側に入った「三三」候補。盤サイズに合わせて自動計算する。
+  const sanOffset = Math.max(0, radius - 3);
+  const sanSanTargets = [...new Set([
+    [ sanOffset, 0], [ sanOffset,-sanOffset], [0,-sanOffset],
+    [-sanOffset, 0], [-sanOffset, sanOffset], [0, sanOffset]
+  ].map(([q,r]) => M[q + ',' + r]).filter(i => i !== undefined))];
+  const sanClaimRadius = Math.min(2, Math.max(0, Math.floor(sanOffset / 3)));
+  const unclaimedSanTargets = sanSanTargets.filter(t =>
+    !b.some((v,j) => v && hexDist(t,j) <= sanClaimRadius)
+  );
+  const openingSanTargets = unclaimedSanTargets.length ? unclaimedSanTargets : sanSanTargets;
+  // 各三三周辺の混み具合を数え、石が少ない方向ほど次の布石候補として優先する。
+  const sanTargetLoads = sanSanTargets.map(t => ({
+    target: t,
+    load: b.reduce((n, v, j) => n + (v && hexDist(t, j) <= 2 ? 1 : 0), 0)
+  }));
+  const minSanLoad = sanTargetLoads.length ? Math.min(...sanTargetLoads.map(x => x.load)) : 0;
+  const balancedSanTargets = sanTargetLoads
+    .filter(x => x.load <= minSanLoad + 1)
+    .map(x => x.target);
+  // 初手は空いている三三周辺から選び、同程度ならランダムにして定型化を避ける。
+  const openingSanFocusPool = balancedSanTargets.length ? balancedSanTargets : openingSanTargets;
+  const openingSanFocus = openingSanFocusPool.length
+    ? openingSanFocusPool[Math.floor(Math.random() * openingSanFocusPool.length)] : null;
   const groups = new Map();
   for (let i = 0; i < b.length; i++) if (b[i] && !groups.has(i)) {
-    const g = group(b, i), libs = libCount(b, g);
-    for (const x of g) groups.set(x, { stones: g, libs, color: b[i] });
+    const g = group(b, i), libs = libCount(b, g), eyes = countEyes(b, g, b[i]);
+    for (const x of g) groups.set(x, { stones: g, libs, eyes, color: b[i] });
   }
-  // 投了は最後の選択肢。①自分の石に眼が1つもない、②合法手を全て調べても眼を作れない、
-  // ③6目以上の「新しく確保できる地」も作れない、の全条件が成立した場合だけ候補にする。
+  const uniqueGroups = [...new Map([...groups.values()].map(g => [g.stones[0], g])).values()];
+  const distanceToStones = (i, list) => {
+    let d = 99;
+    for (const j of list) d = Math.min(d, hexDist(i, j));
+    return d;
+  };
+  // 二眼のある連を持たず、二眼を作る見込みも価値ある領域も尽きた場合は投了候補にする。
   const ownGroups = new Map();
   for (let i = 0; i < b.length; i++) if (b[i] === p && !ownGroups.has(i)) {
     const g = group(b, i);
     const eyes = countEyes(b, g, p);
     for (const x of g) ownGroups.set(x, { stones: g, eyes });
   }
-  const hasOwnEyes = [...ownGroups.values()].some(g => g.eyes > 0);
-  let canCreateEye = false, canMakeNewSixLand = false;
+  const uniqueOwnGroups = [...new Map([...ownGroups.values()].map(g => [g.stones[0], g])).values()];
+  const hasOwnTwoEyeGroup = uniqueOwnGroups.some(g => g.eyes >= 2);
+  let canCreateEye = false, canCreateTwoEyeGroup = false, canMakeNewSixLand = false;
   const currentTerr = territoryForBoard(b);
-  const currentGroups = [...ownGroups.values()];
-  if (!hasOwnEyes && fill > 0.58) {
-    for (let i = 0; i < P.length && !canCreateEye; i++) {
+  if (!hasOwnTwoEyeGroup && fill > 0.50) {
+    // 眼を1つ作れるだけでは生きているとはみなさず、二眼を作れる候補を探す。
+    for (let i = 0; i < P.length && !canCreateTwoEyeGroup; i++) {
       if (b[i]) continue;
       const test = sim(b, i, p);
       if (!test) continue;
       const g = group(test.a, i), afterEyes = countEyes(test.a, g, p);
       const adjacentOwn = NB[i].filter(n => b[n] === p).length;
-      // 完成した眼、または着手によって既存の連に新しい眼ができる場合は投了しない。
-      if (afterEyes > 0 || (adjacentOwn >= Math.max(2, NB[i].length - 1) && NB[i].every(n => !b[n] || b[n] === p))) {
-        canCreateEye = true; break;
-      }
+      if (afterEyes > 0 || (adjacentOwn >= Math.max(2, NB[i].length - 1) && NB[i].every(n => !b[n] || b[n] === p))) canCreateEye = true;
+      if (afterEyes >= 2) canCreateTwoEyeGroup = true;
     }
     // 6目以上の新しい地：合法手の結果、現在より自分の地が6目以上増える場合。
     for (let i = 0; i < P.length && !canMakeNewSixLand; i++) {
@@ -486,7 +518,10 @@ function aiChoose() {
     }
   }
   const hasLargeUnclaimedLand = territoryNowForAI(b, p, regs);
-  const resignationEligible = fill > 0.58 && !hasOwnEyes && !canCreateEye && !canMakeNewSixLand && !hasLargeUnclaimedLand;
+  const hasValuableEnemyArea = regs.some(r => r.size >= 9 && r.cols.size === 1 && !r.cols.has(p));
+  const hasValuableArea = hasLargeUnclaimedLand || hasValuableEnemyArea;
+  const resignationEligible = midgame && !hasOwnTwoEyeGroup && !canCreateTwoEyeGroup &&
+    !canMakeNewSixLand && !hasValuableArea;
 
   let best = -1, bestScore = -Infinity;
   const distTo = (i, list) => {
@@ -500,28 +535,31 @@ function aiChoose() {
     if (b[i]) continue;
     const move = sim(b, i, p);
     if (!move) continue;
+    // reg は中盤の展開評価でも参照するため、すべての使用箇所より前に初期化する。
+    const reg = regs[id[i]];
     const ownGroup = group(move.a, i), libsAfter = libCount(move.a, ownGroup);
     let score = 0;
     // 捕獲は最優先。アタリの救出と相手の弱い石への圧力。
-    score += move.cap.length * (endgame ? 115 : 145);
+    // 取れる石は取るが、確定捕獲を過剰に優先して他の大場を逃さない。
+    score += move.cap.length * (endgame ? 100 : 125);
     const adjacentGroups = new Set();
     for (const n of NB[i]) if (b[n]) {
       const info = groups.get(n);
       if (!info || adjacentGroups.has(info.stones[0])) continue;
       adjacentGroups.add(info.stones[0]);
       if (info.color === p) {
-        if (info.libs === 1 && libsAfter > 1) score += 125;
-        else if (info.libs === 2 && libsAfter > 2) score += 32;
-        // 連絡は切断・捕獲を防ぐときに価値がある。単なる塊への隣接は低評価。
-        if (info.libs <= 2) score += 12;
+        if (info.libs === 1 && libsAfter > 1) score += 195;
+        else if (info.libs === 2 && libsAfter > 2) score += 65;
+        // 切断や捕獲を防ぐ接続を大きく評価する。
+        if (info.libs <= 2) score += 35;
       } else {
         if (info.libs === 1) score += 78;
         else if (info.libs === 2) score += 31;
         else if (info.libs === 3) score += 9;
       }
     }
-    if (libsAfter === 1) score -= 115 + ownGroup.length * 24;
-    else if (libsAfter === 2) score -= 22 + ownGroup.length * 5;
+    if (libsAfter === 1) score -= 145 + ownGroup.length * 30;
+    else if (libsAfter === 2) score -= 28 + ownGroup.length * 6;
     else if (libsAfter === 3) score -= 4 + ownGroup.length * 1.5;
 
     // 眼づくり：自分の石に囲まれた空点を眼候補として評価。
@@ -566,7 +604,7 @@ function aiChoose() {
         }
         if (immediateCapture) break;
       }
-      if (immediateCapture) score -= 620 + ownGroup.length * 65;
+      if (immediateCapture) score -= 1050 + ownGroup.length * 90;
       else if (libsAfter === 2) score -= ownGroup.length >= 4 ? 85 : 38;
     }
     // 捕獲直後に自分の石が取り返される形も検査する。取った石の解放点に
@@ -580,7 +618,7 @@ function aiChoose() {
         const reply = sim(move.a, lib, enemy);
         if (reply && ownGroup.some(st => reply.cap.includes(st))) { recaptured = true; break; }
       }
-      if (recaptured) score -= 700 + ownGroup.length * 70;
+      if (recaptured) score -= 1100 + ownGroup.length * 95;
     }
     // 1線（最外周）は、眼の完成・捕獲/救出・終盤のヨセ以外では大きく抑制。
 
@@ -592,6 +630,18 @@ function aiChoose() {
       (Math.abs(q) === starDist && r === 0) || (Math.abs(r) === starDist && q === 0) ||
       (q === starDist && r === -starDist) || (q === -starDist && r === starDist) ||
       (q === 0 && r === 0);
+
+    // 各プレイヤーの初手は、他の石でまだ使われていない三三周辺へ展開する。
+    // 三三点そのものだけでなく、周囲1〜数マスも候補にし、相手石の隣への反射的な着手を防ぐ。
+    if (opening && stones[p].length === 0 && openingSanFocus !== null) {
+      const sanDist = hexDist(i, openingSanFocus);
+      if (sanDist <= 1) {
+        // 三三の中心と隣接1マスを同程度に高くし、毎局同じ点へ固定されないよう揺らす。
+        score += 135 + Math.random() * 45 + (sanDist === 0 ? 5 : 0);
+      } else {
+        score -= Math.min(190, 55 + Math.max(0, sanDist - 2) * 28);
+      }
+    }
 
     if (opening) {
       // 序盤は塊の隣を埋めず、盤面全体へ展開。辺に寄りすぎず、星付近を評価する。
@@ -609,13 +659,21 @@ function aiChoose() {
       const bestDepth = Math.min(...edgeDepths);
       const sideCoord = Math.max(...preferredCoords.map(coord => coord(P[i])));
       if (sideCoord >= 0) {
-        // 0〜約70%の深さは許容。中心を越えた展開は強く抑制。
+        // 複数方向へ展開できるよう、選好辺の内側は緩やかに加点し、中心越えも過度には罰しない。
         const depthRatio = bestDepth / Math.max(1, 2*radius);
-        if (depthRatio <= 0.70) score += 13 - depthRatio*9;
-        else score -= 10 + (depthRatio-0.70)*42;
-        if (sideCoord >= radius*0.45 && bestDepth >= 1) score += 5;
+        if (depthRatio <= 0.70) score += 10 - depthRatio*6;
+        else score -= 5 + (depthRatio-0.70)*22;
+        if (sideCoord >= radius*0.35 && bestDepth >= 1) score += 4;
       } else {
-        score -= 12 + Math.abs(sideCoord)*2.5;
+        score -= 6 + Math.abs(sideCoord)*1.2;
+      }
+
+      // 三三の各方向の混雑差を評価。空いている方向への布石に最大18点を加点する。
+      if (sanTargetLoads.length) {
+        const nearestTarget = sanTargetLoads.reduce((best, x) =>
+          hexDist(i, x.target) < hexDist(i, best.target) ? x : best, sanTargetLoads[0]);
+        const loadAdvantage = Math.max(0, minSanLoad + 2 - nearestTarget.load);
+        score += Math.min(18, loadAdvantage * 7);
       }
 
       // 序盤の「点」ではなく「境界線」を作る評価。
@@ -658,6 +716,30 @@ function aiChoose() {
       score += Math.min(nearestOwn, 5) * (endgame ? 0.8 : style === 'framework' ? 3.5 : 2.8);
       if (!endgame && nearestOwn === 1) score -= style === 'fighter' ? 4 : 13;
       if (!endgame && nearestOwn === 2) score += style === 'framework' ? 5 : 3;
+      if (midgame && stones[p].length > 0) {
+        // 10手目以降は自石から2〜4間の「ヒラキ」を使い、空いた地の輪郭を作る。
+        if (nearestOwn >= 2 && nearestOwn <= 4) score += 30 + (nearestOwn === 2 ? 9 : nearestOwn === 3 ? 20 : 5);
+        else if (nearestOwn === 5) score += 4;
+        // 自石から遠く、敵の戦術にも関わらない孤立点は大幅に抑える。
+        if (nearestOwn > 5 && move.cap.length === 0) score -= 58 + Math.min(28, (nearestOwn - 5) * 7);
+
+        // 周囲が空いている方向へ二間程度の間隔で進み、新しい地の輪郭を作る手を強く評価。
+        // 近くに敵がいないこと、盤端に追い込まれすぎないこと、空点が十分残っていることを確認。
+        const nearbyEmpty = NB[i].filter(n => !b[n]).length;
+        let openSecondRing = 0;
+        for (let j = 0; j < b.length; j++) {
+          if (b[j] || j === i || hexDist(i, j) !== 2) continue;
+          openSecondRing++;
+        }
+        let openEnemyDist = 99;
+        for (let enemy = 1; enemy <= (G.playerCount || 3); enemy++) if (enemy !== p)
+          openEnemyDist = Math.min(openEnemyDist, distTo(i, stones[enemy]));
+        if (nearestOwn >= 2 && nearestOwn <= 4 && openEnemyDist > 4 &&
+            nearbyEmpty >= Math.min(4, degree - 1) && openSecondRing >= 4 &&
+            (!reg || reg.cols.size === 0 || reg.cols.has(p))) {
+          score += 58 + Math.min(18, openSecondRing * 2) + (nearestOwn === 2 ? 8 : 0);
+        }
+      }
       const midIdeal = style === 'territory' ? 0.70 : style === 'framework' ? 0.48 : 0.60;
       score += (0.70 - Math.abs(radial - midIdeal)) * (endgame ? 4 : style === 'framework' ? 13 : 10);
       // 攻撃型は相手の石の切断点や薄い連の近くを狙う。
@@ -693,7 +775,6 @@ function aiChoose() {
       }
     }
 
-    const reg = regs[id[i]];
     if (reg) {
       // 1〜2目の相手の確定地は、捕獲や二眼形成などの明確な利益がない限り埋めない。
       // 小さな眼の中で多人数が順番に取り返す無意味な連鎖を防ぐ。
@@ -730,6 +811,143 @@ function aiChoose() {
       }
     }
 
+    // 味方へつながらず、二眼を作る余地もない敵領域への単独侵入は強く減点する。
+    // 大きな領域や、捕獲・連絡・二眼形成が見込める手はこの条件から除外する。
+    if (reg && reg.cols.size >= 1 && !reg.cols.has(p) && reg.size < 9 &&
+        adjacentOwn === 0 && nearestOwn > 3 && postEyes < 2 && move.cap.length === 0) {
+      score -= 230 + (reg.size <= 5 ? 90 : 0) + Math.max(0, 4 - libsAfter) * 24;
+      if (libsAfter <= 3) score -= 100;
+    }
+    // 相手の確定地・勢力内で、味方につながらず二眼を作る空間もない侵入は致命的に減点。
+    // この手を選ぶくらいなら、後段の中立点（ダメ）を詰める方がよい。
+    if (reg && reg.cols.size === 1 && !reg.cols.has(p) && reg.size < 12 &&
+        adjacentOwn === 0 && nearestOwn > 2 && postEyes < 2 && move.cap.length === 0) {
+      score -= 520 + (reg.size <= 6 ? 180 : 0) + (libsAfter <= 3 ? 130 : 0);
+    }
+
+    // 他色同士が戦っている場所への、味方とつながらない割り込みを抑制する。
+    // 捕獲・救出・眼づくりの明確な狙いがないなら、戦場から離れて自分の地を広げる。
+    let fightDistance = 99;
+    for (let enemy = 1; enemy <= (G.playerCount || 3); enemy++) if (enemy !== p)
+      fightDistance = Math.min(fightDistance, distTo(i, stones[enemy]));
+    const fightingNearby = fightDistance <= 2 || adjacentEnemy > 0;
+    const hasOwnConnection = adjacentOwn > 0;
+    const clearTacticalPurpose = move.cap.length > 0 || eyesCreated > 0 || postEyes >= 2 ||
+      threatenedOwn.size > 0 || [...adjacentGroups].some(key => { const g = groups.get(key); return g && g.color === p && g.libs <= 2; });
+    if (fightingNearby && !hasOwnConnection && nearestOwn > 2 && !clearTacticalPurpose) {
+      score -= fightDistance <= 1 ? 245 : 170;
+    }
+    // 相手石に接するだけで、自分の石とはつながらない着手は特に避ける。
+    if (adjacentEnemy > 0 && adjacentOwn === 0 && move.cap.length === 0 &&
+        postEyes < 2 && !threatenedOwn.size) score -= 210;
+
+    // ===== 接続・切断・眼・境界の急所 =====
+    const ownAdjacentInfos = [...adjacentGroups].map(k => groups.get(k)).filter(g => g && g.color === p);
+    const enemyAdjacentInfos = [...adjacentGroups].map(k => groups.get(k)).filter(g => g && g.color !== p);
+    const edgeDistance = radius - Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r));
+    const nearestEnemyStrategic = Math.min(...Array.from({length:G.playerCount||3},(_,j)=>j+1)
+      .filter(c => c !== p).map(c => distanceToStones(i, stones[c])), 99);
+
+    // 序盤の最初の4手程度は、自石から7マス以内を探索範囲にし、
+    // その中で最も敵石から離れた「到達不能極」的な空点へ展開する。
+    // 敵石が複数色ある場合は、最も近い敵石までの距離を使って安全度を測る。
+    if (occupied <= 4 && stones[p].length > 0 && nearestOwn <= 7 && !endgame) {
+      const safeDistance = Math.min(8, nearestEnemyStrategic);
+      score += safeDistance * 13;
+      if (nearestEnemyStrategic >= 5) score += 16;
+      if (nearestEnemyStrategic <= 2) score -= 18;
+    }
+
+    // 大きい連を壁へつなぐ：壁に近づき、かつ大きな自連からも遠くない着手を加点。
+    if (edgeDistance <= 2) {
+      for (const g of uniqueGroups) if (g.color === p && g.stones.length >= 3) {
+        const toGroup = distanceToStones(i, g.stones);
+        const groupEdgeDistance = Math.min(...g.stones.map(x => {
+          const [gq,gr] = P[x];
+          return radius - Math.max(Math.abs(gq), Math.abs(gr), Math.abs(gq + gr));
+        }));
+        if (toGroup <= 2 && edgeDistance < groupEdgeDistance) {
+          score += 72 + Math.min(g.stones.length, 10) * 7 + (g.eyes < 2 ? 30 : 0);
+        }
+      }
+    }
+
+    // 自分の弱い連（まだ二眼がなく、呼吸点が少ない）を強い自連へつなぐ。
+    // 1手で合流する点は大きく、そこへ向かう中継点も距離が縮むほど評価する。
+    for (const weak of uniqueGroups) {
+      if (weak.color !== p || weak.eyes >= 2 || weak.libs > 5) continue;
+      const weakD = distanceToStones(i, weak.stones);
+      // 中盤以降、二眼のない自連が二眼を作れる形へ進む手を最優先級にする。
+      if (midgame && weakD <= 2 && postEyes > weak.eyes) {
+        score += (postEyes >= 2 ? 310 : 155) + (weak.libs <= 3 ? 95 : 35)
+          + Math.min(weak.stones.length, 8) * 8;
+      }
+      for (const strong of uniqueGroups) {
+        if (strong.color !== p || strong.stones[0] === weak.stones[0]) continue;
+        const isStrong = strong.eyes >= 2 || strong.libs >= 4 || strong.stones.length >= 5;
+        if (!isStrong) continue;
+        const strongD = distanceToStones(i, strong.stones);
+        if (weakD > 2 || strongD > 3) continue;
+        const oldGap = Math.min(...weak.stones.map(a => distanceToStones(a, strong.stones)));
+        if (weakD + strongD <= oldGap) {
+          score += (midgame ? 190 : 88) + (weakD === 1 ? (midgame ? 75 : 34) : 0)
+            + (strongD === 1 ? (midgame ? 65 : 28) : 0)
+            + Math.min(weak.stones.length, 8) * (midgame ? 9 : 4);
+        }
+      }
+    }
+
+    // 接続急所：ここを相手に占められると自分の連同士が分断されやすい点を急いで押さえる。
+    if (ownAdjacentInfos.length >= 2) {
+      const weakAmong = ownAdjacentInfos.some(g => g.eyes < 2 && g.libs <= 4);
+      const cutThreat = ownAdjacentInfos.some(g => g.libs <= 2);
+      score += 105 + Math.min(ownAdjacentInfos.reduce((n,g)=>n+g.stones.length,0), 12) * 4;
+      if (weakAmong) score += 75;
+      if (cutThreat) score += 65;
+      if (nearestEnemyStrategic <= 2) score += 28;
+    }
+
+    // 相手の同色の別々の連がこの点を使ってつながれる場合は、先回りして接続点を占める。
+    const enemyBridgeColors = new Map();
+    for (const g of enemyAdjacentInfos) {
+      const arr = enemyBridgeColors.get(g.color) || [];
+      if (!arr.some(x => x.stones[0] === g.stones[0])) arr.push(g);
+      enemyBridgeColors.set(g.color, arr);
+    }
+    for (const [enemyColor, arr] of enemyBridgeColors) if (arr.length >= 2) {
+      score += 48 + Math.min(arr.reduce((n,g)=>n+g.stones.length,0), 10) * 2;
+      if (arr.some(g => g.eyes < 2 && g.libs <= 4)) score += 14;
+    }
+
+    // 相手の弱い連が二眼を作るのに使える候補点・周辺点を押さえる。
+    // 既に二眼がある連や、確定した小さな眼を無意味に埋める手は対象外。
+    for (const enemyGroup of uniqueGroups) {
+      if (enemyGroup.color === p || enemyGroup.eyes >= 2 || enemyGroup.libs > 5) continue;
+      const d = distanceToStones(i, enemyGroup.stones);
+      if (d <= 2 && enemyGroup.eyes === 1) score += d === 1 ? 30 : 15;
+      else if (d <= 2 && enemyGroup.eyes === 0 && enemyGroup.libs <= 3) score += d === 1 ? 16 : 8;
+    }
+
+    // 自分の地と相手の地が接する境界・中立地を埋める。境界の急所は特に優先。
+    if (reg && reg.cols.has(p) && [...reg.cols].some(c => c !== p)) {
+      if (nearestOwn <= 3 && nearestEnemyStrategic <= 3) score += endgame ? 32 : 25;
+      else score += endgame ? 20 : 12;
+      // 中立点は、眼の作れない敵地への侵入より安全で実利のある候補。
+      if (midgame && libsAfter >= 2 && !eyeLike) score += 18;
+      if (endgame && libsAfter >= 2 && !eyeLike) score += 24;
+    }
+
+    // 周囲（六角距離5以内）に敵石がない開けた地点を評価する。
+    if (nearestEnemyStrategic > 5) score += opening ? 20 : endgame ? 4 : 12;
+
+    // 自石から画面上の直線距離√3となる斜め位置（軸座標差の二乗和 q²+qr+r²=3）。
+    // 一間の隣接ではないが、次の連絡・展開につながる斜めの形を評価する。
+    const diagonalSqrt3 = stones[p].some(j => {
+      const dq = q - P[j][0], dr = r - P[j][1];
+      return dq*dq + dq*dr + dr*dr === 3;
+    });
+    if (diagonalSqrt3) score += opening ? 18 : endgame ? 5 : 14;
+
     // 終盤は現在の地を直接埋めるより、相手の地を減らす/中立点を取る手を優先。
     if (endgame) {
       if (reg && reg.cols.size === 1 && reg.cols.has(p)) score -= 18;
@@ -762,7 +980,7 @@ function aiChoose() {
           if (enemyEyes === 0 && enemyLibsBefore <= 5) score += Math.max(0, 6 - enemyLibsAfter) * 14;
         }
       }
-      if (move.cap.length) score += move.cap.length * 95;
+      if (move.cap.length) score += move.cap.length * 80;
       // ダメ埋め：中立の空点に安全に石を残せるなら、石1個分の得点を見込んで優先。
       if (reg && reg.cols.size >= 2 && libsAfter >= 2) score += 16 + (reg.size === 1 ? 8 : 0);
       // 呼吸点が少なく眼のない敵連への安全な詰めを、終盤はさらに優先する。
@@ -776,6 +994,38 @@ function aiChoose() {
           if (el <= 3 && libsAfter >= 2) score += el === 1 ? 115 : el === 2 ? 70 : 35;
         }
       }
+    }
+
+    // 自石から横方向（画面上で同じ段）に空地が伸びている場合、
+    // 内側へ寄せるだけの手より、横へ展開して地の輪郭を広げる手を少し優先する。
+    // 同じ r 座標にある自石との距離が 2〜4 で、その間に石がなく、
+    // 着手点のさらに横方向にも空点が続く場合だけ加点する。
+    if (!endgame && stones[p].length > 0) {
+      let horizontalExpansion = false;
+      for (const j of stones[p]) {
+        const [jq, jr] = P[j];
+        if (jr !== r) continue;
+        const dx = q - jq;
+        const adx = Math.abs(dx);
+        if (adx < 2 || adx > 4) continue;
+        const step = Math.sign(dx);
+        let clearLane = true;
+        for (let k = 1; k < adx; k++) {
+          const x = j + 0; // board indices are not linear neighbors; locate by coordinates below
+          const targetQ = jq + step * k;
+          const between = P.findIndex(([bq, br]) => bq === targetQ && br === jr);
+          if (between < 0 || b[between]) { clearLane = false; break; }
+        }
+        if (!clearLane) continue;
+        let openBeyond = 0;
+        for (let k = 1; k <= 2; k++) {
+          const targetQ = q + step * k;
+          const beyond = P.findIndex(([bq, br]) => bq === targetQ && br === r);
+          if (beyond >= 0 && !b[beyond]) openBeyond++;
+        }
+        if (openBeyond > 0) { horizontalExpansion = true; break; }
+      }
+      if (horizontalExpansion && adjacentEnemy === 0 && move.cap.length === 0) score += 12;
     }
 
     // 局所密集ペナルティ：近傍に石が多すぎる点は、眼/戦術手以外では避ける。
@@ -805,7 +1055,7 @@ function aiChoose() {
   }
 
   // 投了条件を満たす場合でも、まずは合法手を評価する。明確な得点手・延命手があれば打つ。
-  if (resignationEligible && (best < 0 || bestScore < -25)) return -2;
+  if (resignationEligible && (best < 0 || bestScore < 18)) return -2;
   // 終盤は中立点（ダメ）を埋め、弱い相手連を攻める手を優先。
   // エリア得点では、中立点に安全に石を置くことは石1点の獲得になる。
   if (best < 0) return -1;

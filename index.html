@@ -58,7 +58,7 @@ canvas{display:block;touch-action:manipulation}
 
   <div id="bnDead" class="hidden w-full flex flex-col gap-2 p-3 bg-amber-50 text-amber-900 text-xs sm:text-sm rounded-xl border border-amber-200 shadow-sm">
     <div class="flex items-center justify-between font-bold"><span>⚠️ 終局・死に石確認</span><span id="deadCount" class="text-xs font-semibold opacity-80">自動判定中…</span></div>
-    <p class="text-xs text-amber-800/90 leading-relaxed">盤面の×印が自動判定した死に石の候補です（中国ルール・面積計算なのでアゲハマは数えません）。判定が違う連はタップして切り替え、必要なら再判定・全解除を使ってください。確定後、死に石を取り除いて「地＋盤上の石」で集計します。</p>
+    <p class="text-xs text-amber-800/90 leading-relaxed">死んでいる可能性が高い石を自動で選択しました。盤面の×印を確認し、判定が違う連はタップして切り替えてください。確定後、死に石を取り除き「地＋盤上の石」で集計します。</p>
     <div class="flex gap-2 pt-1">
       <button id="btnDeadRecheck" class="flex-1 py-1.5 px-3 bg-white border border-amber-300 font-bold rounded-lg hover:bg-amber-100 text-amber-900">自動判定をやり直す</button>
       <button id="btnDeadClear" class="flex-1 py-1.5 px-3 bg-white border border-amber-300 font-bold rounded-lg hover:bg-amber-100 text-amber-900">選択を全解除</button>
@@ -129,11 +129,10 @@ canvas{display:block;touch-action:manipulation}
         <button type="button" data-ai="strong" class="opt">強</button>
         <button type="button" data-ai="max" class="opt">最強</button>
       </div>
-      <p class="text-[11px] leading-relaxed text-neutral-500">AIはモンテカルロ木探索（MCTS）で先を読みます。強いほど1手の思考時間が長くなります（端末性能に依存）。</p>
     </div>
     <div id="seatBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-2">
       <span class="text-xs font-bold text-neutral-600">プレイヤー枠（人間 / AI）</span>
-      <p class="text-[11px] leading-relaxed text-neutral-500">初期状態はすべて人間です。対局中の人間 / AI 切替は即時反映されます（盤面下の「席:」ボタンからも切替可能）。人数・盤サイズの変更は次の対局から適用されます。</p>
+      <p class="text-[11px] leading-relaxed text-neutral-500">初期状態はすべて人間です。対局中の人間 / AI 切替は即時反映されます。人数・盤サイズの変更は次の対局から適用されます。</p>
       <div class="flex gap-2">
         <button data-bulk="human" class="opt flex-1">全員人間</button>
         <button data-bulk="ai" class="opt flex-1">全員AI</button>
@@ -185,7 +184,7 @@ canvas{display:block;touch-action:manipulation}
   <div class="bg-white text-neutral-900 p-5 sm:p-6 max-w-md w-full rounded-2xl shadow-2xl flex flex-col gap-4 border border-neutral-200 max-h-[88vh] overflow-y-auto">
     <div class="flex items-center justify-between border-b pb-3 border-neutral-200"><h2 class="text-xl font-extrabold">HEXAGO ルール</h2><button id="btnCloseRules" class="w-10 h-10 flex items-center justify-center rounded-full text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100 text-xl font-bold shrink-0" aria-label="閉じる">✕</button></div>
     <section class="flex flex-col gap-1"><h3 class="font-bold">1. 基本</h3><p class="text-sm leading-relaxed">自分の手番に空いている交点へ1個打ちます。石は隣接する6方向の呼吸点がすべてなくなると取られます。自殺手や同一局面を繰り返す手は打てません。</p></section>
-    <section class="flex flex-col gap-1"><h3 class="font-bold">2. 得点（中国ルール・面積方式）</h3><p class="text-sm leading-relaxed">終局後の得点は「自分の地＋盤上に残った自分の石」です。地1マスも石1個も、それぞれ1点です。中国ルールなのでアゲハマ（捕獲した石）は数えず、得点から差し引くこともありません。</p></section>
+    <section class="flex flex-col gap-1"><h3 class="font-bold">2. 得点（エリア方式）</h3><p class="text-sm leading-relaxed">終局後の得点は「自分の地＋盤上に残った自分の石」です。地1マスも石1個も、それぞれ1点です。捕獲数は得点から差し引きません。</p></section>
     <section class="flex flex-col gap-1"><h3 class="font-bold">3. 地と中立地</h3><p class="text-sm leading-relaxed">空点の連結領域が1色の石だけに接している場合、その色の地として数えます。複数色に接する領域は中立地として数えません。</p></section>
     <section class="flex flex-col gap-1"><h3 class="font-bold">4. パスと終局</h3><p class="text-sm leading-relaxed">生きているプレイヤー全員が続けてパスすると終局確認に入ります。死んでいる可能性が高い石は自動で選択されます。×印を確認し、必要なら連をタップして判定を直してから確定します。</p></section>
     <section class="flex flex-col gap-1"><h3 class="font-bold">5. 死に石と勝敗</h3><p class="text-sm leading-relaxed">確定した死に石は盤上から取り除いてから地を再計算します。取り除いた石は石の得点に含めません。最終得点が最も高いプレイヤーの勝ちです。</p></section>

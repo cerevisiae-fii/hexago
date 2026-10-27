@@ -227,7 +227,7 @@ canvas{display:block;touch-action:manipulation}
 (function (globalScope) {
   'use strict';
 
-  var VERSION = 'hexago-mcts/1.1.0';
+  var VERSION = 'hexago-mcts/1.2.0';
 
   /* ------------------------------------------------------------------ *
    *  Utilities
@@ -463,6 +463,104 @@ canvas{display:block;touch-action:manipulation}
         if (!mixed && col !== 0 && col <= pc) out[col] += qn;
       }
       out[0] = 0;
+      return out;
+    }
+
+    /* ---------------- end-of-game dead-stone cleanup (page detectDeadStones) ---------------- */
+    var dsBoard = new Int8Array(n);
+    var dsSeen = new Int32Array(n), dsSeenId = 0;
+    var dsGMark = new Int32Array(n), dsGroupId = 0;
+    var dsLibs = new Int16Array(n);
+    var dsDead = new Int16Array(n), dsDeadN = 0;
+    var dsEyeStamp = new Int32Array(n), dsEyeId = 0;
+
+    // Group + full liberty list (page group()+libCount with the actual points).
+    function scanGroupFull(board, start, color) {
+      var sid = ++scanId, lid = ++libId;
+      grpN = 0; grpBuf[grpN++] = start; scanStamp[start] = sid;
+      var libN = 0;
+      for (var gi = 0; gi < grpN; gi++) {
+        var st = grpBuf[gi];
+        for (var j = nbOff[st], je = nbOff[st + 1]; j < je; j++) {
+          var t = nbFlat[j], v = board[t];
+          if (v === color) { if (scanStamp[t] !== sid) { scanStamp[t] = sid; grpBuf[grpN++] = t; } }
+          else if (v === 0 && libStamp[t] !== lid) { libStamp[t] = lid; dsLibs[libN++] = t; }
+        }
+      }
+      lastLibs = libN;
+      return libN;
+    }
+
+    // Page countEyes(b, g, color): empty neighbours of the group whose own
+    // neighbours are all the group's colour (or the group itself).
+    function groupEyeCount(board, color, gid) {
+      var eid = ++dsEyeId, eyes = 0;
+      for (var k = 0; k < grpN; k++) {
+        var st = grpBuf[k];
+        for (var j = nbOff[st], je = nbOff[st + 1]; j < je; j++) {
+          var l = nbFlat[j];
+          if (board[l] !== 0 || dsEyeStamp[l] === eid) continue;
+          if (nbOff[l + 1] - nbOff[l] < 3) continue;
+          var ok = true;
+          for (var j2 = nbOff[l], je2 = nbOff[l + 1]; j2 < je2; j2++) {
+            var x = nbFlat[j2], v = board[x];
+            if (v !== color && dsGMark[x] !== gid) { ok = false; break; }
+          }
+          if (ok) { dsEyeStamp[l] = eid; eyes++; }
+        }
+      }
+      return eyes;
+    }
+
+    // Conservative dead-stone removal, byte-for-byte page detectDeadStones()
+    // semantics: no eyes, liberties <= 2, every liberty surrounded by exactly
+    // one enemy colour with <= 1 friendly stone, and one enemy colour adjacent.
+    function removeDeadStones(board) {
+      dsSeenId++; dsDeadN = 0;
+      var i, k, j, je, s, v, gN, libN, ok, enemyCol, mixed;
+      for (i = 0; i < n; i++) {
+        var color = board[i];
+        if (color === 0 || dsSeen[i] === dsSeenId) continue;
+        libN = scanGroupFull(board, i, color);
+        gN = grpN;
+        dsGroupId++;
+        var gid = dsGroupId;
+        for (k = 0; k < gN; k++) { dsSeen[grpBuf[k]] = dsSeenId; dsGMark[grpBuf[k]] = gid; }
+        if (libN === 0 || libN > 2) continue;
+        if (groupEyeCount(board, color, gid) > 0) continue;
+        ok = true;
+        for (k = 0; k < libN && ok; k++) {
+          var l = dsLibs[k], around = 0, friendly = 0;
+          var nlen = nbOff[l + 1] - nbOff[l];
+          for (j = nbOff[l], je = nbOff[l + 1]; j < je; j++) {
+            v = board[nbFlat[j]];
+            if (v === 0) continue;
+            if (v === color) friendly++; else around++;
+          }
+          if (!(around >= Math.max(2, nlen - 2) && friendly <= 1)) ok = false;
+        }
+        if (!ok) continue;
+        enemyCol = 0; mixed = false;
+        for (k = 0; k < gN && !mixed; k++) {
+          s = grpBuf[k];
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            v = board[nbFlat[j]];
+            if (v === 0 || v === color) continue;
+            if (enemyCol === 0) enemyCol = v; else if (v !== enemyCol) { mixed = true; break; }
+          }
+        }
+        if (mixed || enemyCol === 0) continue;
+        for (k = 0; k < gN; k++) dsDead[dsDeadN++] = grpBuf[k];
+      }
+      for (k = 0; k < dsDeadN; k++) board[dsDead[k]] = 0;
+      return dsDeadN;
+    }
+
+    function deadStonesImpl(board) {
+      dsBoard.set(board);
+      removeDeadStones(dsBoard);
+      var out = [];
+      for (var i = 0; i < n; i++) if (board[i] !== 0 && dsBoard[i] === 0) out.push(i);
       return out;
     }
 
@@ -726,6 +824,7 @@ canvas{display:block;touch-action:manipulation}
         do { t2 = (t2 % pcCur) + 1; } while (outFlags[t2]);
         plyMover = t2;
       }
+      removeDeadStones(pboard);
       scoreBoardInto(pboard, outSc, pcCur);
     }
 
@@ -810,7 +909,9 @@ canvas{display:block;touch-action:manipulation}
     }
 
     function terminalScores(board) {
-      scoreBoardInto(board, scoreScratch, pcCur);
+      dsBoard.set(board);
+      removeDeadStones(dsBoard);
+      scoreBoardInto(dsBoard, scoreScratch, pcCur);
       var t = new Int16Array(pcCur + 1);
       t.set(scoreScratch.subarray(0, pcCur + 1));
       return t;
@@ -1205,6 +1306,7 @@ canvas{display:block;touch-action:manipulation}
       think: think,
       _rootLegalMoves: rootLegalMovesImpl,
       _scoreBoard: scoreBoardImpl,
+      _deadStones: deadStonesImpl,
       _root: null
     };
     return engine;

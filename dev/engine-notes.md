@@ -1,4 +1,4 @@
-# HEXAGO MCTS engine — implementation notes (v1.1.0, RAVE)
+# HEXAGO MCTS engine — implementation notes (v1.2.0, RAVE + dead-stone endgame scoring)
 
 Files:
 - `dev/ai-engine.js` — the engine (single self-contained file, inlined into `index.html` by `dev/inline-engine.js`)
@@ -16,10 +16,10 @@ Throughput, `engine.think(..., {maxPlayouts: N})` after JIT warm-up (real playou
 
 | board | points | playouts/sec |
 |---|---|---|
-| 9 | 61 | **6 588** (mid-game position) |
-| 13 | 127 | 1 831 |
-| 19 | 271 | 569 |
-| 25 | 469 | 211 |
+| 9 | 61 | **6 289** (mid-game position; v1.2 dead-stone cleanup cost ~4.5 %) |
+| 13 | 127 | 1 760 |
+| 19 | 271 | 548 |
+| 25 | 469 | 205 |
 
 AMAF/RAVE overhead is negligible in practice: on a fixed 61-point position, a fresh 150 ms
 search performs 956 playouts/call (frozen v1.0.0: 954); at 800 ms 5 011 vs 5 091 (-1.6 %).
@@ -68,6 +68,14 @@ Root legality is **exact** page legality: occupied / suicide / superko only when
   the move leading into the node). UCT at a node therefore maximises that node's mover's outcome;
   backprop uses the terminal score array per player, so 3–6 player games stay adversarial
   (win = rank 1, tie = 0.5, value = (score[p] − best other) / n clamped to [−1, 1]).
+- Dead-stone endgame scoring (v1.2.0): every rollout terminal position and every
+  pass-end tree terminal is run through an exact port of the page `detectDeadStones()`
+  before area scoring (no eyes, liberties <= 2, each liberty surrounded by one enemy
+  colour with <= 1 friendly stone, one adjacent enemy colour). The self-test compares
+  the removed set 1:1 against the function extracted from `index.html` (crafted + 80
+  random boards). This makes the playout/endgame evaluation agree with the page's
+  final scoring (which removes dead stones in `finishScore`), instead of scoring dead
+  stones as alive. Cost: ~4.5 % throughput (6 588 -> 6 289 pps on 61 points).
 - RAVE/AMAF: each child also keeps `rn` (AMAF visits) and `rw` (AMAF wins, same perspective as
   `w`). AMAF counts moves played by the parent's mover anywhere in the simulation (tree moves +
   playout moves, with player attribution). Selection value is
@@ -146,8 +154,10 @@ many iterations and **ignores the wall clock** (this is the determinism contract
 - Playout policy on 19/25 boards analyses tactics only around the last two moves plus a small
   sample (speed trade-off); on 9/13 boards it analyses every local candidate.
 - Superko is exact at the root only. Deeper tree nodes and playouts use simple ko (per spec).
-- Dead stones are scored as alive at the end of playouts (standard area approximation); the page's
-  `detectDeadStones` phase is not modelled.
+- Dead stones ARE now cleaned up at playout/tree terminal positions (v1.2.0, page
+  `detectDeadStones` semantics). It is still a heuristic port, and the page's *manual*
+  dead-stone confirmation phase is not modelled (all-AI games use the same automatic
+  detection, so the two agree).
 - Tree reuse only happens when the exact resulting board, turn, pass count and resignation flags
   match a stored root child; otherwise the search restarts. `state.seen` is not stored in the
   engine, so an externally reverted board may simply miss reuse (never incorrect).
@@ -182,3 +192,42 @@ Build history: v1.0.0 (frozen md5 `5d5e611e6f7728ee0243248af855e8e3`) → v1.1.0
 v1.0.0 is not shipped; the comparison numbers above are kept as the record of the experiment.
 - `dev/ai-engine.js` must be re-inlined (`node dev/inline-engine.js`) after any edit; the page
   copy is the shipped source of truth.
+
+
+## 7. Pass / dead-stone endgame work (v1.2.0)
+
+Motivation (user report + Lead probe): the engine filled the board to a few empties before
+passing and its playout terminal scoring counted dead stones as alive, so its endgame
+evaluation disagreed with the page's final scoring (`detectDeadStones` + `finishScore`).
+
+Adopted: an exact port of page `detectDeadStones()` (no eyes, liberties <= 2, every liberty
+surrounded by one enemy colour with <= 1 friendly stone, one adjacent enemy colour) is applied
+to every rollout terminal position and every pass-end tree terminal before area scoring.
+Self-test compares the removed set 1:1 with the function extracted from `index.html`
+(crafted case + 80 random boards, sizes 9/13) and checks the crafted dead stone is removed
+before scoring. Cost: 61-point throughput 6 588 -> ~6 300-6 500 playouts/sec (-1..4.5 %).
+
+Equal-budget A/B (page-rules referee from `bench/lib/rules.js`, page scoring with dead-stone
+removal, 2p, 61 points, seats alternated, distinct seeds, 20 games, 150 ms/move,
+0 illegal / 0 crashes):
+
+| engine | wins | notes |
+|---|---|---|
+| v1.1.0 (frozen) | 8 | raw-vs-page score delta up to 11 pts |
+| v1.2.0 (dead-stone cleanup) | **12 (60 %)** | adopted (bar was >= 60 %) |
+
+Dead-stone frequency in those 20 games: 15/20 games had dead stones (avg 1.45 per game),
+which is exactly the gap the engine was previously ignoring. Game length unchanged
+(~90-120 real moves; raw pass-end score now agrees with the page).
+
+Pass experiment (NOT adopted): "always offer pass + require it to clearly beat the best
+placement and only play it when empty <= 55 %" measured 50 % in 4 self-play games (neutral),
+with longer games and an occasional earlier pass. The safer gate (pass offered after an
+opponent pass, at pass-end, or when empty <= 20 %) was kept. In the adopted build the first
+pass happens around move ~100-120 and passes appear at 7-12 then 4-6 empties, i.e. endgame only.
+
+800 ms spot check: not completed inside the timebox (2 games at 800 ms with the 400-move
+referee cap ran longer than the remaining budget and were killed); the 150 ms A/B is the
+adopted evidence. Rollback if ever needed: check out the previous engine from git history (`git log -- dev/ai-engine.js`) and re-run `node dev/inline-engine.js`.
+
+Build md5: `ff454c5f850943dab3536a0574dde7c5` (v1.2.0).

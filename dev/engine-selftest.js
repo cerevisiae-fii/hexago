@@ -71,7 +71,9 @@ function makePageApi() {
     sliceFunction(src, 'const libCount =') + ';',
     sliceFunction(src, 'function sim(b, i, p)'),
     sliceFunction(src, 'function territoryForBoard(board)'),
-    sliceFunction(src, 'function hexDist(i, j)')
+    sliceFunction(src, 'function hexDist(i, j)'),
+    sliceFunction(src, 'function countEyes(b, g, color)'),
+    sliceFunction(src, 'function detectDeadStones()')
   ];
   const code = [
     '"use strict";',
@@ -87,6 +89,7 @@ function makePageApi() {
     '  setSeen: a => { seenSet = new Set(a); },',
     '  territoryForBoard: (b, pc) => { G = { playerCount: pc }; return territoryForBoard(b); },',
     '  hexDist: (i, j) => hexDist(i, j),',
+    '  detectDeadStones: (b, size) => { build(size); G = { board: b.slice() }; return [...new Set(detectDeadStones())]; },',
     '};'
   ].join('\n');
   return new Function(code)();
@@ -345,6 +348,67 @@ section('4. scoring parity (territory + stones vs page finishScore rules)');
 }
 
 /* ------------------------------------------------------------------ *
+ *  4b. dead-stone cleanup parity with page detectDeadStones()
+ * ------------------------------------------------------------------ */
+section('4b. dead-stone cleanup (page detectDeadStones parity)');
+{
+  // Crafted: black stone on a 3-neighbour corner with 2 white neighbours and 1
+  // liberty whose other neighbours are white. page detectDeadStones marks it dead.
+  const g9 = E.geometry(9);
+  const corner = g9.NB.findIndex(nb => nb.length === 3);
+  const cnb = g9.NB[corner];
+  const liberty = cnb[2];
+  const crafted = new Array(g9.n).fill(0);
+  crafted[corner] = 1;
+  crafted[cnb[0]] = 2;
+  crafted[cnb[1]] = 2;
+  for (const x of g9.NB[liberty]) if (x !== corner) crafted[x] = 2;
+  const pageDead = page.detectDeadStones(crafted, 9).sort((a, b) => a - b);
+  const eng = E.createEngine({ size: 9, playerCount: 2 });
+  const ourDead = eng._deadStones(crafted, 2).sort((a, b) => a - b);
+  check('crafted surrounded stone detected as dead (engine == page)',
+    ourDead.length === 1 && ourDead[0] === corner && eqArr(ourDead, pageDead), JSON.stringify(ourDead));
+
+  // Engine's terminal scoring removes dead stones: raw area score of the
+  // crafted board treats the stone alive, the cleanup removes it.
+  const rawScore = eng._scoreBoard(crafted, 2);
+  check('dead stone removed before scoring (raw score still counts it alive)',
+    ourDead.length === 1 && rawScore[1] > 0);
+
+  // Random boards across sizes/player counts: exact set parity with the page.
+  const rnd = mulberry32(6060);
+  let ok = true, msg = '', cases = 0, deadTotal = 0;
+  for (const size of [9, 13]) {
+    const gg = E.geometry(size);
+    for (let t = 0; t < 40; t++) {
+      const pc = 2 + (t % 5);
+      const board = new Array(gg.n).fill(0);
+      const seeds = 1 + ((t * 37) % 9);
+      for (let s = 0; s < seeds; s++) {
+        const col = 1 + ((t + s) % pc), i0 = (t * 53 + s * 17) % gg.n;
+        board[i0] = col;
+        for (const x of gg.NB[i0]) if ((t + s) % 3 !== 0) board[x] = col;
+      }
+      for (let i = 0; i < gg.n; i++) if (!board[i] && ((t * 7 + i * 11) % 23 === 0)) board[i] = 1 + ((t + i) % pc);
+      const ref = page.detectDeadStones(board, size).sort((a, b) => a - b);
+      const ours = E.createEngine({ size, playerCount: pc })._deadStones(board, pc).sort((a, b) => a - b);
+      cases++; deadTotal += ref.length;
+      if (!eqArr(ref, ours)) { ok = false; msg = 'size ' + size + ' trial ' + t; break; }
+    }
+    if (!ok) break;
+  }
+  check('engine dead-stone set === page detectDeadStones (random boards, sizes 9/13)',
+    ok, msg || (cases + ' boards, ' + deadTotal + ' dead stones'));
+
+  // Engine hits the same result as its own pass-end scoring path through think():
+  const stDead = makeState(9, 2, crafted, 2, 1, [], fullOut(2));
+  let rDead = null;
+  try { rDead = E.createEngine({ size: 9, playerCount: 2 }).think(stDead, { maxPlayouts: 200, seed: 5 }); } catch (e) { rDead = null; }
+  check('think() on a board with dead stones still returns a legal move',
+    !!rDead && (rDead.move === -1 || crafted[rDead.move] === 0));
+}
+
+/* ------------------------------------------------------------------ *
  *  5. pass / endgame and always-legal behaviour
  * ------------------------------------------------------------------ */
 
@@ -364,6 +428,12 @@ section('5. pass / endgame / always-legal');
   const rFull = engFull.think(stFull, { budgetMs: 100, seed: 5 });
   check('full board: think() returns pass (-1)', rFull.move === -1, 'move=' + rFull.move);
   check('full board: board not mutated by think()', eqArr(stFull.board, full));
+
+  // early game: pass must NOT be a root candidate while the board is open
+  const stEarly = makeState(9, 2, empty, 1, 0, [], fullOut(2));
+  const rEarly = E.createEngine({ size: 9, playerCount: 2 }).think(stEarly, { maxPlayouts: 800, seed: 21 });
+  check('early game: pass not offered as a root candidate', !rEarly.bestMoves.some(m => m.move === -1) && rEarly.move !== -1,
+    'best=' + JSON.stringify(rEarly.bestMoves.slice(0, 3).map(m => m.move)));
 
   // game already ended by passes: think is a no-op pass with no search
   const stOver = makeState(9, 2, empty, 1, 2, [], fullOut(2));

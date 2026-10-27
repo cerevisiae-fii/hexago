@@ -1,0 +1,17 @@
+# development artifacts (not shipped)
+dev/*.log
+dev/*.png
+dev/.frozen-ai-backup.js
+dev/ai-engine-rave.js
+dev/rave-match.js
+dev/.profile-tmp.js
+
+# node
+node_modules/
+npm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

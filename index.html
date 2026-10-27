@@ -57,9 +57,13 @@ canvas{display:block;touch-action:manipulation}
   <div id="quickSeats" class="hidden w-full flex-wrap items-center justify-center gap-2 text-[11px]"></div>
 
   <div id="bnDead" class="hidden w-full flex flex-col gap-2 p-3 bg-amber-50 text-amber-900 text-xs sm:text-sm rounded-xl border border-amber-200 shadow-sm">
-    <div class="flex items-center justify-between font-bold"><span>⚠️ 終局・死に石確認</span><span class="text-xs opacity-75">自動判定済み</span></div>
-    <p class="text-xs text-amber-800/90 leading-relaxed">死んでいる可能性が高い石を自動で選択しました。盤面の×印を確認し、判定が違う連はタップして切り替えてください。確定後、死に石を取り除き「地＋盤上の石」で集計します。</p>
+    <div class="flex items-center justify-between font-bold"><span>⚠️ 終局・死に石確認</span><span id="deadCount" class="text-xs font-semibold opacity-80">自動判定中…</span></div>
+    <p class="text-xs text-amber-800/90 leading-relaxed">盤面の×印が自動判定した死に石の候補です（中国ルール・面積計算なのでアゲハマは数えません）。判定が違う連はタップして切り替え、必要なら再判定・全解除を使ってください。確定後、死に石を取り除いて「地＋盤上の石」で集計します。</p>
     <div class="flex gap-2 pt-1">
+      <button id="btnDeadRecheck" class="flex-1 py-1.5 px-3 bg-white border border-amber-300 font-bold rounded-lg hover:bg-amber-100 text-amber-900">自動判定をやり直す</button>
+      <button id="btnDeadClear" class="flex-1 py-1.5 px-3 bg-white border border-amber-300 font-bold rounded-lg hover:bg-amber-100 text-amber-900">選択を全解除</button>
+    </div>
+    <div class="flex gap-2">
       <button id="btnDeadCancel" class="flex-1 py-1.5 px-3 bg-white border border-amber-300 font-bold rounded-lg hover:bg-amber-100 text-amber-900">対局再開</button>
       <button id="btnDeadOk" class="flex-1 py-1.5 px-3 bg-amber-900 text-white font-bold rounded-lg hover:bg-amber-800">死に石を除去して集計</button>
     </div>
@@ -181,7 +185,7 @@ canvas{display:block;touch-action:manipulation}
   <div class="bg-white text-neutral-900 p-5 sm:p-6 max-w-md w-full rounded-2xl shadow-2xl flex flex-col gap-4 border border-neutral-200 max-h-[88vh] overflow-y-auto">
     <div class="flex items-center justify-between border-b pb-3 border-neutral-200"><h2 class="text-xl font-extrabold">HEXAGO ルール</h2><button id="btnCloseRules" class="w-10 h-10 flex items-center justify-center rounded-full text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100 text-xl font-bold shrink-0" aria-label="閉じる">✕</button></div>
     <section class="flex flex-col gap-1"><h3 class="font-bold">1. 基本</h3><p class="text-sm leading-relaxed">自分の手番に空いている交点へ1個打ちます。石は隣接する6方向の呼吸点がすべてなくなると取られます。自殺手や同一局面を繰り返す手は打てません。</p></section>
-    <section class="flex flex-col gap-1"><h3 class="font-bold">2. 得点（エリア方式）</h3><p class="text-sm leading-relaxed">終局後の得点は「自分の地＋盤上に残った自分の石」です。地1マスも石1個も、それぞれ1点です。捕獲数は得点から差し引きません。</p></section>
+    <section class="flex flex-col gap-1"><h3 class="font-bold">2. 得点（中国ルール・面積方式）</h3><p class="text-sm leading-relaxed">終局後の得点は「自分の地＋盤上に残った自分の石」です。地1マスも石1個も、それぞれ1点です。中国ルールなのでアゲハマ（捕獲した石）は数えず、得点から差し引くこともありません。</p></section>
     <section class="flex flex-col gap-1"><h3 class="font-bold">3. 地と中立地</h3><p class="text-sm leading-relaxed">空点の連結領域が1色の石だけに接している場合、その色の地として数えます。複数色に接する領域は中立地として数えません。</p></section>
     <section class="flex flex-col gap-1"><h3 class="font-bold">4. パスと終局</h3><p class="text-sm leading-relaxed">生きているプレイヤー全員が続けてパスすると終局確認に入ります。死んでいる可能性が高い石は自動で選択されます。×印を確認し、必要なら連をタップして判定を直してから確定します。</p></section>
     <section class="flex flex-col gap-1"><h3 class="font-bold">5. 死に石と勝敗</h3><p class="text-sm leading-relaxed">確定した死に石は盤上から取り除いてから地を再計算します。取り除いた石は石の得点に含めません。最終得点が最も高いプレイヤーの勝ちです。</p></section>
@@ -1423,6 +1427,7 @@ function hash(a) { // cyrb53
 const KEY = 'hexago-save-v1';
 function save() {
   try { sessionStorage.setItem(KEY, JSON.stringify({ G, onlineAI, pendingSize, mode, seats, theme: theme.id, sound: snd.on, aiLevel })); } catch (e) { }
+  try { if (typeof saveOnlineSession === 'function') saveOnlineSession(); } catch (e) { }
 }
 function load() {
   try {
@@ -1471,7 +1476,7 @@ function play(i) {
 }
 function doPass() {
   snd.click(); snap(G.turn); G.passes++; G.last = -1;
-  if (G.passes >= activeCount()) { G.phase = 'dead'; G.dead = detectDeadStones(); prev = -1; } else nextTurn();
+  if (G.passes >= activeCount()) { G.phase = 'dead'; G.dead = detectDeadStonesSmart(); prev = -1; } else nextTurn();
 }
 function territory() {
   const t = Array((G?.playerCount || playerCount || 3) + 1).fill(0), vis = new Set();
@@ -1505,7 +1510,6 @@ function detectDeadStones() {
     for (const x of g) for (const n of NB[x]) if (!b[n]) libs.add(n);
     const eyes = countEyes(b, g, color);
     if (eyes > 0 || libs.size > 2 || libs.size === 0) continue;
-    // 各呼吸点が敵石に強く囲まれ、連自身の隣接石が少ない場合だけ死に石候補とする。
     const surrounded = [...libs].every(lib => {
       const around = NB[lib].filter(n => b[n] && b[n] !== color);
       const friendly = NB[lib].filter(n => b[n] === color);
@@ -1514,6 +1518,86 @@ function detectDeadStones() {
     const enemyColors = new Set();
     for (const x of g) for (const n of NB[x]) if (b[n] && b[n] !== color) enemyColors.add(b[n]);
     if (surrounded && enemyColors.size === 1) dead.push(...g);
+  }
+  return [...new Set(dead)];
+}
+// 終局時の死に石を自動推定する（強化版・画面用）。
+// 盤面の各連について、相手がその呼吸点を順に埋めて実際に取れるか（ローカル捕獲探索）を調べる。
+// 2眼がある連は埋められないので生き、セキのように埋めると自滅する連も生きとして残る。
+// 自動判定はあくまで候補。終局確認画面で人間がタップして修正できる。
+function playStoneOnBoard(board, i, p) {
+  if (board[i]) return null;
+  const a = board.slice();
+  a[i] = p;
+  const cap = [], done = new Set();
+  for (const n of NB[i]) if (a[n] && a[n] !== p && !done.has(n)) {
+    const g = group(a, n);
+    g.forEach(x => done.add(x));
+    if (!libCount(a, g)) cap.push(...g);
+  }
+  cap.forEach(x => a[x] = 0);
+  if (!libCount(a, group(a, i))) return null; // 自殺手
+  return { a, cap };
+}
+function canEnemyCaptureGroup(board, group0, color, pc) {
+  let b = board.slice();
+  let grp = group0.slice();
+  if (!grp.length || !b[grp[0]]) return false;
+  for (let step = 0; step < 64; step++) {
+    const libs = new Set();
+    for (const s of grp) for (const n of NB[s]) if (!b[n]) libs.add(n);
+    if (libs.size === 0) return true; // 取れた
+    let moved = false;
+    const enemyColors = new Set();
+    for (let c = 1; c <= pc; c++) if (c !== color) enemyColors.add(c);
+    for (const l of [...libs]) {
+      // その点の周囲にいる敵色を優先し、いなければ他の敵色も試す
+      const colors = [];
+      for (const n of NB[l]) if (b[n] && b[n] !== color) colors.push(b[n]);
+      for (const c of enemyColors) if (!colors.includes(c)) colors.push(c);
+      for (const enemy of colors) {
+        const res = playStoneOnBoard(b, l, enemy);
+        if (!res) continue;
+        b = res.a;
+        if (!b[grp[0]]) return true;
+        grp = group(b, grp[0]);
+        moved = true;
+        break;
+      }
+      if (moved) break;
+    }
+    if (!moved) return false; // どの敵も埋められない = 生き（セキ含む）
+  }
+  return false;
+}
+function detectDeadStonesSmart() {
+  const b = G.board;
+  const pc = G.playerCount || playerCount || 2;
+  const seen = new Set(), dead = [];
+  // 空点の連結領域。敵に囲まれた小さな領域の中の連だけを死の候補にする
+  // （開けた中央の石や、自分の地に囲まれた石を誤って死にしないため）。
+  const { id, regs } = regionInfo(b);
+  for (let i = 0; i < b.length; i++) {
+    if (!b[i] || seen.has(i)) continue;
+    const color = b[i];
+    const g = group(b, i);
+    g.forEach(x => seen.add(x));
+    if (!libCount(b, g)) continue;
+    if (countEyes(b, g, color) >= 2) continue;      // 二眼は無条件で生き
+    const libs = new Set();
+    for (const x of g) for (const n of NB[x]) if (!b[n]) libs.add(n);
+    let enclosed = libs.size > 0;
+    const regionIds = new Set();
+    for (const l of libs) regionIds.add(id[l]);
+    for (const rid of regionIds) {
+      const reg = regs[rid];
+      if (!reg) { enclosed = false; break; }
+      const hasEnemy = [...reg.cols].some(c => c !== color);
+      if (!hasEnemy) { enclosed = false; break; }                    // 自分の色だけに囲まれた空間は生き
+      if (reg.size > Math.max(6, g.length * 2 + 2)) { enclosed = false; break; } // 広すぎる所は判定しない
+    }
+    if (!enclosed) continue;
+    if (canEnemyCaptureGroup(b, g, color, pc)) dead.push(...g);
   }
   return [...new Set(dead)];
 }
@@ -2513,7 +2597,7 @@ cv.addEventListener('click', e => {
   snd.init(); if (G.over) return;
   const i = hit(e); if (i < 0) return;
   if (G.phase === 'dead') {
-    if (G.board[i]) { const g = group(G.board, i), isD = G.dead.includes(i); G.dead = isD ? G.dead.filter(x => !g.includes(x)) : [...new Set([...G.dead, ...g])]; snd.click(); render(); save(); sync(); }
+    if (G.board[i]) { const g = group(G.board, i), isD = G.dead.includes(i); G.dead = isD ? G.dead.filter(x => !g.includes(x)) : [...new Set([...G.dead, ...g])]; snd.click(); updateUI(); save(); sync(); }
     return;
   }
   if (!mine() || G.phase !== 'playing') return;
@@ -2585,6 +2669,14 @@ function updateUI() {
   resetResignButton();
   renderQuickSeats();
   $('bnDead').classList.toggle('hidden', G.phase !== 'dead');
+  const deadCountEl = document.getElementById('deadCount');
+  if (deadCountEl) {
+    if (G.phase === 'dead') {
+      const groups = new Set();
+      G.dead.forEach(i => { if (G.board[i]) groups.add(group(G.board, i)[0]); });
+      deadCountEl.textContent = '自動判定: ' + groups.size + '連 / ' + G.dead.length + '石';
+    } else deadCountEl.textContent = '';
+  }
   $('bnResult').classList.toggle('hidden', !G.over);
   render();
 }
@@ -2675,6 +2767,8 @@ $('btnUndoNo').onclick = () => closeModal($('undoModal'));
 $('btnUndoOk').onclick = () => { closeModal($('undoModal')); undo(); };
 $('btnDeadCancel').onclick = () => { snd.click(); G.phase = 'playing'; G.passes = 0; G.dead = []; after(); };
 $('btnDeadOk').onclick = () => { snd.click(); finishScore(); after(); };
+$('btnDeadRecheck').onclick = () => { snd.click(); G.dead = detectDeadStonesSmart(); updateUI(); save(); sync(); };
+$('btnDeadClear').onclick = () => { snd.click(); G.dead = []; updateUI(); save(); sync(); };
 
 // ===== プレイヤー設定 =====
 const SEAT_MODES = ['human', 'ai'];
@@ -2845,16 +2939,354 @@ function resetRoomData() {
   roomPool = Object.create(null); disconnectedNicknames = Object.create(null);
 }
 function closePeer() {
+  stopNetTimers();
+  releaseWakeLock();
+  clearOnlineSession();
   cancelAI();
   conns.forEach(c => { try { c.close(); } catch (e) { } }); conns = [];
-  if (hostConn) { try { hostConn.close(); } catch (e) { } hostConn = null; }
-  if (peer) { try { peer.destroy(); } catch (e) { } peer = null; }
-  myRole = null; isHost = false; roomCode = null; myNickname = '';
+  if (hostConn) { hostConn.__ignoreNet = true; try { hostConn.close(); } catch (e) { } hostConn = null; }
+  if (peer) { peer.__ignoreNet = true; try { peer.destroy(); } catch (e) { } peer = null; }
+  myRole = null; isHost = false; roomCode = null; myNickname = ''; netStatus = '';
   resetRoomData();
   if ($('roomSt')) $('roomSt').textContent = '';
   if ($('roomPool')) $('roomPool').innerHTML = '';
   if ($('roomSeatBtns')) $('roomSeatBtns').innerHTML = '';
 }
+
+// ===== 接続の安定化：自動再接続 / ハートビート / セッション復元 =====
+// GitHub Pages（サーバーなし）で動かすため、PeerJS の公開シグナリングサーバーだけを使い、
+// 切断時はクライアント側で同じルームIDへ自動再接続する。ホスト端末のスリープ復帰や
+// タブのリロードでも、席と対局状態を復元できるようにする。
+const ONLINE_SESSION_KEY = 'hexago-online-session-v1';
+const NET_PING_MS = 4000;
+const NET_TIMEOUT_MS = 15000;
+let netStatus = '';
+let netRetryTimer = null, netRetryAttempt = 0, netConnecting = false;
+let hostPingTimer = null, guestPingTimer = null;
+let lastHostMessageAt = 0;
+let screenWakeLock = null;
+
+function setNetStatus(msg) { netStatus = msg || ''; renderRoomUI(); }
+function netDelay(attempt) { return Math.min(8000, 700 * Math.pow(1.6, Math.min(attempt, 6))) + Math.floor(Math.random() * 400); }
+function stopNetTimers() {
+  if (netRetryTimer) { clearTimeout(netRetryTimer); netRetryTimer = null; }
+  if (hostPingTimer) { clearInterval(hostPingTimer); hostPingTimer = null; }
+  if (guestPingTimer) { clearInterval(guestPingTimer); guestPingTimer = null; }
+  netConnecting = false;
+}
+async function requestWakeLock() {
+  if (mode !== 'online' || !navigator.wakeLock || screenWakeLock) return;
+  try {
+    screenWakeLock = await navigator.wakeLock.request('screen');
+    screenWakeLock.addEventListener('release', () => { screenWakeLock = null; });
+  } catch (e) { screenWakeLock = null; }
+}
+function releaseWakeLock() {
+  if (screenWakeLock) { try { screenWakeLock.release(); } catch (e) { } screenWakeLock = null; }
+}
+function buildOnlineSession() {
+  return {
+    roomCode, isHost, myRole: Number.isInteger(myRole) ? myRole : null, myNickname, boardView,
+    playerCount: G?.playerCount || playerCount, pendingSize,
+    seatNicknames: seatNicknames.slice(0, 7),
+    disconnectedNicknames: { ...disconnectedNicknames },
+    seats: seats.slice(0, 7),
+    when: Date.now(),
+  };
+}
+function saveOnlineSession() {
+  try {
+    if (mode === 'online' && roomCode) sessionStorage.setItem(ONLINE_SESSION_KEY, JSON.stringify(buildOnlineSession()));
+    else sessionStorage.removeItem(ONLINE_SESSION_KEY);
+  } catch (e) { }
+}
+function clearOnlineSession() { try { sessionStorage.removeItem(ONLINE_SESSION_KEY); } catch (e) { } }
+function readOnlineSession() {
+  try {
+    const raw = sessionStorage.getItem(ONLINE_SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s || !s.roomCode) return null;
+    if (Date.now() - (s.when || 0) > 10 * 60 * 1000) { sessionStorage.removeItem(ONLINE_SESSION_KEY); return null; }
+    return s;
+  } catch (e) { return null; }
+}
+function isConnAlive(peerId) { return conns.some(c => c.peer === peerId && c.open); }
+
+// ホスト: 同じルームIDで Peer を作り直す。resume=true のときは部屋データを保持したまま復旧する。
+function startHostPeer(code, nickname, opts) {
+  opts = opts || {};
+  stopNetTimers();
+  if (peer) { peer.__ignoreNet = true; try { peer.destroy(); } catch (e) { } peer = null; }
+  conns.forEach(c => { c.__ignoreNet = true; try { c.close(); } catch (e) { } });
+  conns = []; hostConn = null;
+  mode = 'online'; isHost = true; roomCode = String(code || '').toUpperCase(); myNickname = nickname || myNickname || '';
+  setNetStatus(opts.resume ? 'ホスト接続を復旧しています…' : '部屋を準備しています…');
+  const candidate = new Peer(PFX + roomCode.toLowerCase(), { debug: 0 });
+  peer = candidate;
+  candidate.on('connection', c => {
+    if (peer !== candidate) { try { c.close(); } catch (e) { } return; }
+    conns.push(c); c.lastPong = Date.now(); wire(c);
+  });
+  candidate.on('open', () => {
+    if (peer !== candidate) return;
+    netRetryAttempt = 0;
+    if (!roomPool[LOCAL_HOST_ID]) roomPool[LOCAL_HOST_ID] = { nickname: myNickname, seat: null };
+    else roomPool[LOCAL_HOST_ID].nickname = myNickname;
+    if (Number.isInteger(myRole) && myRole > 0) {
+      roomPool[LOCAL_HOST_ID].seat = myRole;
+      seatOwners[myRole] = LOCAL_HOST_ID;
+      seats[myRole] = 'human';
+    }
+    if (G) {
+      G.aiSeats = Array.from({ length: (G.playerCount || playerCount) + 1 }, (_, p) => p > 0 && (seats[p] !== 'human' || !seatOwners[p]));
+      G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v);
+    }
+    $('hostNickname').value = $('hostNickname').value || myNickname;
+    $('hostRoomId').value = roomCode; $('roomIn').value = roomCode;
+    $('btnCreate').disabled = false;
+    setNetStatus('');
+    syncSettings(); updateUI(); renderRoomUI(); saveOnlineSession(); maybeAI(); sendSnapshot();
+    requestWakeLock(); startHostHeartbeat();
+  });
+  candidate.on('disconnected', () => {
+    if (candidate.__ignoreNet || peer !== candidate) return;
+    setNetStatus('サーバーと切断。再接続しています…');
+    try { candidate.reconnect(); } catch (e) { }
+    setTimeout(() => { if (peer === candidate && candidate.disconnected) scheduleHostReconnect(); }, 2500);
+  });
+  candidate.on('close', () => { if (candidate.__ignoreNet) return; if (peer === candidate) { peer = null; scheduleHostReconnect(); } });
+  candidate.on('error', err => {
+    if (candidate.__ignoreNet || peer !== candidate) return;
+    const type = err && err.type;
+    if (type === 'unavailable-id') setNetStatus('ルームIDを再取得しています…');
+    else if (type === 'peer-unavailable') return;
+    else setNetStatus('通信エラー。復旧しています…');
+    try { candidate.destroy(); } catch (e) { }
+    if (peer === candidate) peer = null;
+    scheduleHostReconnect();
+  });
+  saveOnlineSession();
+}
+
+function scheduleHostReconnect(reason) {
+  if (!isHost || !roomCode) return;
+  if (reason) setNetStatus(reason);
+  if (netRetryTimer) return;
+  const delay = netDelay(netRetryAttempt++);
+  netRetryTimer = setTimeout(() => {
+    netRetryTimer = null;
+    if (!isHost || !roomCode) return;
+    startHostPeer(roomCode, myNickname, { resume: true });
+  }, delay);
+}
+
+function startHostHeartbeat() {
+  if (hostPingTimer) clearInterval(hostPingTimer);
+  hostPingTimer = setInterval(() => {
+    if (mode !== 'online' || !isHost) return;
+    const now = Date.now();
+    conns.slice().forEach(c => {
+      if (!c.open) { handleDisconnect(c); return; }
+      if (now - (c.lastPong || now) > NET_TIMEOUT_MS) { try { c.close(); } catch (e) { } handleDisconnect(c); return; }
+      try { c.send({ t: 'ping', ts: now }); } catch (e) { }
+    });
+  }, NET_PING_MS);
+}
+
+// ゲスト: シグナリング切断時は再接続し、ホスト接続が切れたら同じルームへ自動で入り直す。
+function startGuestPeer(code, nickname) {
+  stopNetTimers();
+  if (hostConn) { hostConn.__ignoreNet = true; try { hostConn.close(); } catch (e) { } }
+  if (peer) { peer.__ignoreNet = true; try { peer.destroy(); } catch (e) { } peer = null; }
+  hostConn = null;
+  mode = 'online'; isHost = false; roomCode = String(code || '').toUpperCase(); myNickname = nickname || myNickname || ''; boardView = 'participant';
+  setNetStatus('接続しています…');
+  const candidate = new Peer({ debug: 0 });
+  peer = candidate;
+  candidate.on('open', () => {
+    if (peer !== candidate) return;
+    netRetryAttempt = 0;
+    setNetStatus('ホストに接続しています…');
+    connectToHost();
+    startGuestHeartbeat();
+    requestWakeLock();
+    syncSettings(); updateUI();
+  });
+  candidate.on('disconnected', () => {
+    if (candidate.__ignoreNet || peer !== candidate) return;
+    setNetStatus('サーバーと切断。再接続しています…');
+    try { candidate.reconnect(); } catch (e) { }
+    setTimeout(() => { if (peer === candidate && candidate.disconnected) { try { candidate.destroy(); } catch (e) { } if (peer === candidate) peer = null; scheduleGuestReconnect(); } }, 2500);
+  });
+  candidate.on('close', () => { if (peer === candidate) { peer = null; scheduleGuestReconnect(); } });
+  candidate.on('error', err => {
+    if (candidate.__ignoreNet || peer !== candidate) return;
+    const type = err && err.type;
+    if (type === 'peer-unavailable') { setNetStatus('ホストの復帰を待っています…'); scheduleGuestReconnect(); return; }
+    try { candidate.destroy(); } catch (e) { }
+    if (peer === candidate) peer = null;
+    setNetStatus('通信エラー。再接続しています…');
+    scheduleGuestReconnect();
+  });
+  saveOnlineSession();
+}
+
+function connectToHost() {
+  if (mode !== 'online' || isHost || !roomCode) return;
+  if (!peer || peer.destroyed) { startGuestPeer(roomCode, myNickname); return; }
+  if (!peer.open) return;
+  if (hostConn && hostConn.open) return;
+  if (netConnecting) return;
+  netConnecting = true;
+  const c = peer.connect(PFX + roomCode.toLowerCase(), { reliable: true });
+  hostConn = c;
+  lastHostMessageAt = Date.now();
+  const openTimer = setTimeout(() => {
+    if (hostConn === c && !c.open) { try { c.close(); } catch (e) { } hostConn = null; netConnecting = false; scheduleGuestReconnect('ホストの応答がありません'); }
+  }, 7000);
+  c.on('open', () => {
+    clearTimeout(openTimer);
+    if (hostConn !== c) return;
+    netConnecting = false; netRetryAttempt = 0; lastHostMessageAt = Date.now();
+    setNetStatus('入室しています…');
+    try { c.send({ t: 'hello', nickname: myNickname }); } catch (e) { }
+    renderRoomUI();
+  });
+  c.on('data', d => onConnData(c, d));
+  c.on('close', () => {
+    clearTimeout(openTimer);
+    if (hostConn === c) hostConn = null;
+    netConnecting = false;
+    if (c.__ignoreNet) return;
+    if (mode === 'online' && !isHost) scheduleGuestReconnect('接続が切れました');
+  });
+  c.on('error', () => {
+    clearTimeout(openTimer);
+    if (hostConn === c) hostConn = null;
+    netConnecting = false;
+    if (c.__ignoreNet) return;
+    if (mode === 'online' && !isHost) scheduleGuestReconnect('接続エラー');
+  });
+}
+
+function scheduleGuestReconnect(reason) {
+  if (mode !== 'online' || isHost) return;
+  if (reason) setNetStatus(reason + '。再接続しています…');
+  if (netRetryTimer) return;
+  const delay = netDelay(netRetryAttempt++);
+  netRetryTimer = setTimeout(() => {
+    netRetryTimer = null;
+    if (mode !== 'online' || isHost) return;
+    if (!peer || peer.destroyed) startGuestPeer(roomCode, myNickname);
+    else if (peer.disconnected) { try { peer.reconnect(); } catch (e) { } connectToHost(); }
+    else connectToHost();
+  }, delay);
+}
+
+function startGuestHeartbeat() {
+  if (guestPingTimer) clearInterval(guestPingTimer);
+  guestPingTimer = setInterval(() => {
+    if (mode !== 'online' || isHost) return;
+    const now = Date.now();
+    if (hostConn && hostConn.open) {
+      if (now - lastHostMessageAt > NET_TIMEOUT_MS) {
+        setNetStatus('ホストの応答がありません。再接続しています…');
+        try { hostConn.close(); } catch (e) { }
+        hostConn = null;
+        scheduleGuestReconnect();
+        return;
+      }
+      try { hostConn.send({ t: 'ping', ts: now }); } catch (e) { }
+    } else if (!netConnecting) {
+      scheduleGuestReconnect('ホストと切断されました');
+    }
+  }, NET_PING_MS);
+}
+
+// ホスト/ゲスト共通: 受信データの振り分け（ping/pong は接続監視用）
+function onConnData(c, d) {
+  if (!d) return;
+  if (d.t === 'ping') {
+    try { c.send({ t: 'pong', ts: d.ts }); } catch (e) { }
+    if (!isHost) lastHostMessageAt = Date.now();
+    return;
+  }
+  if (d.t === 'pong') {
+    c.lastPong = Date.now();
+    if (!isHost) lastHostMessageAt = Date.now();
+    return;
+  }
+  if (isHost) handleHostMessage(d, c);
+  else if (d.t === 'snapshot') applySnapshot(d);
+  else if (d.t === 'notice') $('roomSt').textContent = d.message || '部屋からの通知があります。';
+}
+
+function hostHealthCheck() {
+  if (mode !== 'online' || !isHost) return;
+  if (!peer || peer.destroyed) { scheduleHostReconnect('接続を復旧しています…'); return; }
+  if (peer.disconnected) { try { peer.reconnect(); } catch (e) { } setNetStatus('サーバーへ再接続しています…'); return; }
+  if (!peer.open) { scheduleHostReconnect('接続を復旧しています…'); return; }
+  const now = Date.now();
+  conns.slice().forEach(c => {
+    if (!c.open || now - (c.lastPong || now) > NET_TIMEOUT_MS) { try { c.close(); } catch (e) { } handleDisconnect(c); }
+  });
+  const msg = roomSnapshot();
+  conns.forEach(c => { if (c.open) { try { c.send(msg); } catch (e) { } } });
+  saveOnlineSession();
+}
+
+function guestHealthCheck() {
+  if (mode !== 'online' || isHost || !roomCode) return;
+  if (!peer || peer.destroyed) { scheduleGuestReconnect('接続を復旧しています…'); return; }
+  if (!peer.open) { if (peer.disconnected) { try { peer.reconnect(); } catch (e) { } } scheduleGuestReconnect('接続を復旧しています…'); return; }
+  if (!hostConn || !hostConn.open) { connectToHost(); return; }
+  if (Date.now() - lastHostMessageAt > NET_TIMEOUT_MS) {
+    try { hostConn.close(); } catch (e) { }
+    hostConn = null;
+    scheduleGuestReconnect('ホストの応答がありません');
+  }
+}
+
+function networkWake() {
+  if (mode !== 'online' || !roomCode) return;
+  netRetryAttempt = 0;
+  clearTimeout(netRetryTimer); netRetryTimer = null;
+  requestWakeLock();
+  if (isHost) hostHealthCheck(); else guestHealthCheck();
+}
+
+// 保存済みのオンラインセッションから復帰（リロード / スリープ復帰後の再読込）
+function resumeOnlineSession(sessionOverride) {
+  const s = sessionOverride || readOnlineSession();
+  if (!s || !s.roomCode || !G) return false;
+  mode = 'online'; isHost = !!s.isHost; roomCode = String(s.roomCode).toUpperCase();
+  myNickname = s.myNickname || ''; boardView = s.boardView || (isHost ? 'host' : 'participant');
+  playerCount = Math.max(2, Math.min(6, s.playerCount || G.playerCount || 3));
+  G.playerCount = playerCount;
+  seats = Array.from({ length: 7 }, (_, i) => i === 0 ? 0 : (s.seats && s.seats[i] === 'ai' ? 'ai' : 'human'));
+  seatNicknames = Array.isArray(s.seatNicknames) ? s.seatNicknames.slice(0, 7) : ['', '', '', '', '', '', ''];
+  while (seatNicknames.length < 7) seatNicknames.push('');
+  disconnectedNicknames = Object.assign(Object.create(null), s.disconnectedNicknames || {});
+  seatOwners = Array(7).fill(null); roomPool = Object.create(null);
+  myRole = Number.isInteger(s.myRole) && s.myRole > 0 ? s.myRole : null;
+  if (isHost) {
+    roomPool[LOCAL_HOST_ID] = { nickname: myNickname, seat: null };
+    if (myRole) { seatOwners[myRole] = LOCAL_HOST_ID; seats[myRole] = 'human'; roomPool[LOCAL_HOST_ID].seat = myRole; }
+    for (let p = 1; p <= playerCount; p++) {
+      if (p === myRole) continue;
+      if (seatNicknames[p]) { seats[p] = 'ai'; disconnectedNicknames[p] = seatNicknames[p]; }
+    }
+  } else { myRole = null; }
+  G.aiSeats = Array.from({ length: playerCount + 1 }, (_, p) => p > 0 && (seats[p] !== 'human' || (isHost && !seatOwners[p])));
+  G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v);
+  setSeen(); syncSettings(); updateUI();
+  setNetStatus('前回のルームに再接続しています…');
+  if (isHost) startHostPeer(roomCode, myNickname, { resume: true });
+  else startGuestPeer(roomCode, myNickname);
+  return true;
+}
+
 function roomSnapshot() {
   return { t: 'snapshot', G, pendingSize, playerCount, seats: seats.slice(), seatOwners: seatOwners.slice(), seatNicknames: seatNicknames.slice(), roomPool: JSON.parse(JSON.stringify(roomPool)), disconnectedNicknames: { ...disconnectedNicknames }, roomCode };
 }
@@ -2897,6 +3329,7 @@ function applySnapshot(data) {
   setRemoteRoleFromSnapshot(); setSeen(); prev = -1;
   if (G?.over && !wasOver && G.result) showResult();
   if (!G?.over) $('resModal').classList.add('hidden');
+  if (!isHost) setNetStatus('');
   syncSettings(); updateUI(); save();
 }
 function assignSeat(ownerId, p, nickname) {
@@ -2915,11 +3348,47 @@ function handleHostMessage(data, c) {
     const checked = rawName ? validateNickname(rawName) : { ok: true, value: '__AUTO_NICK__' };
     if (!checked.ok) { c.send({ t: 'notice', message: checked.message }); c.close(); return; }
     const nickname = checked.value === '__AUTO_NICK__' ? `${Object.keys(roomPool).length + 1}p` : checked.value;
+    // 同じニックネームの古い接続・プール項目を掃除する（リロード/スリープ復帰の重複対策）
+    Object.keys(roomPool).forEach(id => {
+      if (id === LOCAL_HOST_ID || id === c.peer) return;
+      if (String(roomPool[id]?.nickname || '').toLowerCase() !== nickname.toLowerCase()) return;
+      const oldSeat = seatOwners.indexOf(id);
+      if (oldSeat > 0) {
+        seatOwners[oldSeat] = null;
+        disconnectedNicknames[oldSeat] = nickname;
+        seatNicknames[oldSeat] = nickname;
+        seats[oldSeat] = 'ai';
+      }
+      const oldConn = conns.find(x => x.peer === id);
+      if (oldConn) { conns = conns.filter(x => x !== oldConn); try { oldConn.close(); } catch (e) { } }
+      delete roomPool[id];
+    });
     roomPool[c.peer] = { nickname, seat: null };
-    const reconnectSeat = Array.from({length: Math.min(6, playerCount)}, (_, i) => i + 1)
+    // 1) 切断時に予約された席  2) 名前が一致し、所有者の接続が死んでいる席（取り残し対策）
+    let reconnectSeat = Array.from({ length: Math.min(6, playerCount) }, (_, i) => i + 1)
       .find(p => !seatOwners[p] && disconnectedNicknames[p] && disconnectedNicknames[p].toLowerCase() === nickname.toLowerCase());
-    if (reconnectSeat) assignSeat(c.peer, reconnectSeat, nickname);
+    if (!reconnectSeat) {
+      reconnectSeat = Array.from({ length: Math.min(6, playerCount) }, (_, i) => i + 1)
+        .find(p => seatOwners[p] && seatOwners[p] !== c.peer && seatNicknames[p] && seatNicknames[p].toLowerCase() === nickname.toLowerCase() && !isConnAlive(seatOwners[p]));
+      if (reconnectSeat) {
+        const oldOwner = seatOwners[reconnectSeat];
+        seatOwners[reconnectSeat] = null;
+        if (roomPool[oldOwner]) delete roomPool[oldOwner];
+      }
+    }
+    if (reconnectSeat) {
+      const hadSeatOwner = !!seatOwners[reconnectSeat];
+      assignSeat(c.peer, reconnectSeat, nickname);
+      if (!hadSeatOwner) delete disconnectedNicknames[reconnectSeat];
+    }
+    setNetStatus('');
+    if (G) {
+      G.aiSeats = Array.from({ length: (G.playerCount || playerCount) + 1 }, (_, p) => p > 0 && (seats[p] !== 'human' || !seatOwners[p]));
+      G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v);
+    }
     sendSnapshot();
+    if (G && G.phase === 'playing' && aiSeatOf(G.turn) === false) { syncSettings(); updateUI(); after(); }
+    else { syncSettings(); updateUI(); }
     return;
   }
   if (data.t === 'claim') {
@@ -2965,21 +3434,25 @@ function handleDisconnect(c) {
     if (G && role <= G.playerCount && G.aiSeats) { G.aiSeats[role] = true; G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v); }
   }
   delete roomPool[c.peer];
+  // すでに再接続してプールで待っている同一ニックネームがいれば、その場で席を戻す
+  if (role > 0 && nickname) {
+    const waitingId = Object.keys(roomPool).find(id => roomPool[id] && !roomPool[id].seat &&
+      String(roomPool[id].nickname || '').toLowerCase() === nickname.toLowerCase());
+    if (waitingId) {
+      const oldOwner = seatOwners[role];
+      seatOwners[role] = null;
+      if (assignSeat(waitingId, role, nickname)) { setNetStatus(''); sendSnapshot(); }
+      else if (oldOwner) { seatOwners[role] = null; }
+    }
+  }
+  if (nickname) setNetStatus(role > 0 ? `${nickname} が切断されました。再接続を待っています（AIが代行）` : '参加者が切断されました');
   if (G && G.phase === 'playing' && G.aiSeats?.[G.turn]) { after(); }
   else { syncSettings(); updateUI(); sync(); }
-  $('roomSt').textContent = nickname ? `${nickname} が切断されました。該当席は一時的にAIが代行します。` : '参加者が切断されました。';
 }
 function wire(c) {
-  c.on('data', d => {
-    if (isHost) handleHostMessage(d, c);
-    else if (d?.t === 'snapshot') applySnapshot(d);
-    else if (d?.t === 'notice') $('roomSt').textContent = d.message || '部屋からの通知があります。';
-  });
-  c.on('close', () => {
-    if (isHost) handleDisconnect(c);
-    else { $('roomSt').textContent = '部屋との接続が切れました。再入室すると復帰できます。'; }
-  });
-  c.on('error', () => { $('roomSt').textContent = '通信エラーが発生しました。'; });
+  c.on('data', d => onConnData(c, d));
+  c.on('close', () => { if (isHost) handleDisconnect(c); });
+  c.on('error', () => { if (isHost) handleDisconnect(c); });
 }
 function claimLocalHostSeat(p) {
   const item = roomPool[LOCAL_HOST_ID];
@@ -3019,8 +3492,9 @@ function renderRoomUI() {
   if (!poolEl || !seatEl || !statusEl) return;
   poolEl.innerHTML = ''; seatEl.innerHTML = '';
   const hostMember = roomPool[LOCAL_HOST_ID];
-  if (roomCode) statusEl.textContent = `ルームID：${roomCode}｜ホスト：${hostMember?.nickname || (isHost ? myNickname : '接続中')}`;
-  else if (mode === 'online' && hostConn) statusEl.textContent = '接続中…';
+  if (roomCode) statusEl.textContent = `ルームID：${roomCode}｜ホスト：${hostMember?.nickname || (isHost ? myNickname : '接続中')}` + (netStatus ? `｜${netStatus}` : '');
+  else if (mode === 'online' && netStatus) statusEl.textContent = netStatus;
+  else if (mode === 'online' && (hostConn || peer)) statusEl.textContent = '接続中…';
   else if (mode === 'online' && !peer) statusEl.textContent = 'ホストボードで部屋を作成するか、参加者ボードでIDを入力してください。';
   const entries = Object.entries(roomPool);
   if (!entries.length) {
@@ -3069,31 +3543,15 @@ $('btnCreate').onclick = () => {
   if (isHost && roomCode && roomCode.toUpperCase() === code) {
     $('roomSt').textContent = 'このIDは現在の部屋で使用中です。別のIDを指定してください。'; return;
   }
-  $('roomSt').textContent = `ルームID「${code}」を確認中…`;
+  closePeer();
+  mode = 'online'; boardView = 'host'; isHost = true; roomCode = code; myNickname = checkedName.value;
+  if (!G) { build(pendingSize); G = newG(pendingSize); G.phase = 'setup'; setSeen(); }
+  if (G.phase !== 'setup') { playerCount = G.playerCount; pendingSize = G.size; }
+  roomPool[LOCAL_HOST_ID] = { nickname: myNickname, seat: null };
+  $('hostNickname').value = myNickname; $('hostRoomId').value = code; $('roomIn').value = code;
   $('btnCreate').disabled = true;
-  // 既存の参加状態を維持したまま指定IDを先に確保し、重複時は現在の接続を壊さない。
-  const candidate = new Peer(PFX + code.toLowerCase(), { debug: 0 });
-  let completed = false;
-  candidate.on('open', () => {
-    if (completed) return; completed = true;
-    closePeer();
-    peer = candidate; mode = 'online'; boardView = 'host'; isHost = true; roomCode = code; myNickname = checkedName.value;
-    if (!G) { build(pendingSize); G = newG(pendingSize); G.phase = 'setup'; setSeen(); }
-    if (G.phase !== 'setup') { playerCount = G.playerCount; pendingSize = G.size; }
-    if (G && G.aiSeats) { for (let p = 1; p <= G.playerCount; p++) G.aiSeats[p] = seats[p] !== 'human' || !seatOwners[p]; G.aiSeat = G.aiSeats.findIndex((v, i) => i > 0 && v); }
-    roomPool[LOCAL_HOST_ID] = { nickname: myNickname, seat: null };
-    $('hostNickname').value = myNickname; $('hostRoomId').value = code; $('roomIn').value = code;
-    candidate.on('connection', c => { conns.push(c); wire(c); });
-    $('btnCreate').disabled = false;
-    syncSettings(); updateUI(); sendSnapshot(); save(); maybeAI();
-  });
-  candidate.on('error', e => {
-    if (completed) return;
-    completed = true;
-    try { candidate.destroy(); } catch (err) { }
-    $('btnCreate').disabled = false;
-    $('roomSt').textContent = e.type === 'unavailable-id' ? 'そのルームIDは既に使用されています。別のIDを指定してください。' : '部屋作成エラー。IDや通信状態を確認してください。';
-  });
+  syncSettings(); updateUI();
+  startHostPeer(code, myNickname, { resume: false });
 };
 $('btnJoin').onclick = () => {
   snd.click();
@@ -3103,19 +3561,30 @@ $('btnJoin').onclick = () => {
   if (!checkedId.ok) { $('roomSt').textContent = checkedId.message; return; }
   if (!checked.ok) { $('roomSt').textContent = checked.message; return; }
   const code = checkedId.value;
-  closePeer(); mode = 'online'; boardView = 'participant'; myNickname = checked.value; $('roomSt').textContent = '接続中…'; syncSettings(); updateUI();
-  peer = new Peer({ debug: 0 });
-  peer.on('open', () => {
-    hostConn = peer.connect(PFX + code.toLowerCase(), { reliable: true }); wire(hostConn);
-    hostConn.on('open', () => { roomCode = code; hostConn.send({ t: 'hello', nickname: myNickname }); renderRoomUI(); syncSettings(); });
-  });
-  peer.on('error', e => { $('roomSt').textContent = e.type === 'peer-unavailable' ? '部屋が見つかりません。IDを確認してください。' : '接続エラーが発生しました。'; });
+  closePeer();
+  mode = 'online'; boardView = 'participant'; myNickname = checked.value; roomCode = code;
+  $('roomSt').textContent = '接続中…';
+  syncSettings(); updateUI();
+  startGuestPeer(code, myNickname);
 };
+// スリープ / タブ移動では Peer を破棄しない（復帰時にそのまま再接続できる）。
+// 明示的にモードを変えたときは closePeer() が後始末する。
 window.addEventListener('pagehide', () => {
   save();
+  saveOnlineSession();
   aiPool.forEach(slot => { try { slot.worker.terminate(); } catch (e) { } });
   aiPool = [];
-  if (mode === 'online') closePeer();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { saveOnlineSession(); return; }
+  if (mode === 'online') networkWake();
+});
+window.addEventListener('pageshow', () => { if (mode === 'online') networkWake(); });
+window.addEventListener('online', () => {
+  if (mode === 'online') { setNetStatus('ネットワーク復帰。再接続しています…'); networkWake(); }
+});
+window.addEventListener('offline', () => {
+  if (mode === 'online') setNetStatus('オフラインです。ネットワーク復帰を待っています…');
 });
 
 // ===== デバッグ用フック（E2E 検証・AI 性能確認用。UI には影響しない） =====
@@ -3132,6 +3601,47 @@ window.__hexagoDebug = {
   setAllAI: () => setAllSeatModes('ai'),
   setAllHuman: () => setAllSeatModes('human'),
   newGame: (size) => { if (size) pendingSize = size; return reset(); },
+  net: () => ({
+    roomCode, isHost, myRole, myNickname,
+    peerOpen: !!(peer && peer.open), peerDisconnected: !!(peer && peer.disconnected),
+    conns: conns.length, hostConnOpen: !!(hostConn && hostConn.open),
+    status: netStatus, session: !!readOnlineSession(),
+  }),
+  netDropGuestConn: () => {
+    if (isHost) return false;
+    if (hostConn) { try { hostConn.close(); } catch (e) { } hostConn = null; }
+    scheduleGuestReconnect('テスト切断');
+    return true;
+  },
+  netDropHostPeer: () => {
+    if (!isHost) return false;
+    if (peer) { peer.__ignoreNet = true; try { peer.destroy(); } catch (e) { } }
+    peer = null;
+    scheduleHostReconnect('テスト切断');
+    return true;
+  },
+  setBoardForTest: (arr) => {
+    G.board = arr.slice();
+    G.dead = []; G.phase = 'playing'; G.over = false; G.result = null; G.hist = []; G.passes = 0; G.last = -1;
+    setSeen(); render();
+  },
+  enterDeadPhase: () => { G.phase = 'dead'; G.dead = detectDeadStonesSmart(); updateUI(); save(); return G.dead.slice(); },
+  deadInfo: () => ({ phase: G.phase, dead: G.dead.slice(), conservative: detectDeadStones(), smart: detectDeadStonesSmart() }),
+  toggleDeadAt: (i) => {
+    if (G.phase !== 'dead' || !G.board[i]) return G.dead.slice();
+    const g = group(G.board, i);
+    const isD = G.dead.includes(i);
+    G.dead = isD ? G.dead.filter(x => !g.includes(x)) : [...new Set([...G.dead, ...g])];
+    updateUI(); save();
+    return G.dead.slice();
+  },
+  finishNow: () => { finishScore(); after(); return { over: G.over, result: G.result }; },
+  scoreInfo: () => {
+    const t = territory();
+    const pc = G.playerCount || playerCount;
+    const stones = Array.from({ length: pc + 1 }, (_, p) => p === 0 ? 0 : G.board.filter(v => v === p).length);
+    return { territory: t, stones, total: t.map((v, i) => v + stones[i]) };
+  },
 };
 
 // ===== 起動 =====
@@ -3139,10 +3649,14 @@ window.onload = () => {
   buildThemes();
   const restored = load();
   if (!restored) { build(9); G = newG(9); G.phase = 'setup'; setSeen(); }
+  // applyTheme()/save() can clear the stored online session, so read it before them.
+  const pendingOnline = restored ? readOnlineSession() : null;
   applyTheme(theme); syncSettings();
+  const resumedOnline = !!(pendingOnline && resumeOnlineSession(pendingOnline));
   if (!restored) $('setModal').classList.remove('hidden');
   if (G.over && G.result) $('bnResult').classList.remove('hidden');
-  resizeCanvas(); updateUI(); maybeAI();
+  resizeCanvas(); updateUI();
+  if (!resumedOnline) maybeAI();
 };
 </script>
 </body>

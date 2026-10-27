@@ -41,6 +41,7 @@ GitHub Pages / Cloudflare Pages / Netlify などに `index.html` を置けばそ
 | RAVE版 vs 旧エンジン（同時間150ms、30局） | **RAVE版 30勝0敗**（導入前後の比較） |
 | 新AI 800ms vs 100ms（9路盤、2人、6局） | **800ms 側が 5勝1敗**（時間を増やすと強くなる） |
 | ブラウザ E2E（Worker/合法性/応答性/9・13・19・25路/3人） | **17/17 PASS**、思考中のフレーム落ち最大 17ms |
+| オンライン E2E（PeerJS：入室→着席→同期→AI着手の同期） | **8/8 PASS** |
 | 最強設定の探索量（9路盤・5秒・4 Worker） | **1手あたり約129,000局面**（ブラウザ実測） |
 | エンジン自己テスト | **47/47 PASS**（ルール一致・合法性・決定性・速度・Worker 動作） |
 | スループット（シングルスレッド） | 61点: 約6,300 playouts/秒 / 127点: 約1,800 / 271点: 約560 / 469点: 約200 |
@@ -55,6 +56,7 @@ dev/ai-engine.js        MCTS エンジンのソース（唯一の正）
 dev/inline-engine.js    ai-engine.js を index.html に埋め込むビルド／検証スクリプト
 dev/engine-selftest.js  ルール一致・合法性・決定性・速度の自己テスト
 dev/e2e.js              Playwright によるブラウザ E2E（任意）
+dev/e2e-online.js       Playwright によるオンライン対戦（PeerJS）E2E（任意・要ネット接続）
 dev/engine-notes.md     実装メモ・実測値・制限
 dev/ENGINE_SPEC.md      エンジン API 仕様
 bench/                  旧AI抽出＋独立ルール実装による対戦ベンチ（Node のみ）
@@ -75,6 +77,7 @@ node bench/bench.js --old-vs-new --games 10 --size 9 --players 2 --time 200 --se
 
 # 4) ブラウザ E2E（Playwright が必要: npm i -D playwright && npx playwright install chromium）
 node dev/e2e.js
+node dev/e2e-online.js   # オンライン対戦（PeerJS の公開サーバーへ接続）
 ```
 
 ## 既知の制限

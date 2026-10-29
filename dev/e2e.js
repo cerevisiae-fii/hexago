@@ -211,6 +211,26 @@ function check(name, ok, detail) {
   });
   check('4-6 player page/engine legal moves', multi.every(r => r.legal && r.pcState === r.pc && r.visits > 0), JSON.stringify(multi));
 
+  /* 5c. 4/6-player all-AI games actually progress (turn rotation, no errors) */
+  const multiAI = await page.evaluate(async () => {
+    const d = window.__hexagoDebug;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const out = [];
+    d.setAIBudgetMs(120);
+    for (const pc of [4, 6]) {
+      d.setAllAI();
+      document.querySelector('#playerCountBtns [data-count="' + pc + '"]')?.click();
+      d.newGame(9);
+      const t0 = Date.now();
+      while (Date.now() - t0 < 15000 && d.state().board.filter(Boolean).length < pc * 2) await sleep(100);
+      out.push({ pc, stones: d.state().board.filter(Boolean).length, turn: d.state().turn });
+    }
+    d.setAIBudgetMs(150);
+    d.setAllHuman();
+    return out;
+  });
+  check('4-6 player all-AI games progress', multiAI.every(r => r.stones >= r.pc * 2), JSON.stringify(multiAI));
+
   /* 6. AI vs AI progress + event-loop responsiveness */
   await page.evaluate(() => {
     const d = window.__hexagoDebug;

@@ -1,10 +1,15 @@
 # development artifacts (not shipped)
+dev/*.bak.js
+dev/.*.json
 dev/*.log
 dev/*.png
 dev/.frozen-ai-backup.js
 dev/ai-engine-rave.js
 dev/rave-match.js
 dev/.profile-tmp.js
+
+# generated benchmark outputs
+bench/test/results/
 
 # node
 node_modules/

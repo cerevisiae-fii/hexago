@@ -84,7 +84,8 @@ function check(name, ok, detail) {
   /* 2. page API sanity */
   const st0 = await page.evaluate(() => window.__hexagoDebug.state());
   check('page state sane', st0 && st0.size === 9 && Array.isArray(st0.board) && st0.board.length === 61, 'size=' + (st0 && st0.size));
-  check('default AI level is strongest', st0 && st0.aiLevel === 'max', 'aiLevel=' + (st0 && st0.aiLevel));
+  const aiUi = await page.evaluate(() => ({ selector: !!document.querySelector('#aiLevelBtns'), budget: window.__hexagoDebug.state().aiBudget }));
+  check('single fixed AI strength (no difficulty selector)', !aiUi.selector, 'aiBudget=' + aiUi.budget);
 
   /* 2b. modal UX: backdrop click, Escape, result close button */
   const modalOpen = async id => page.evaluate(mid => !document.getElementById(mid).classList.contains('hidden'), id);
@@ -167,7 +168,7 @@ function check(name, ok, detail) {
     const res = await d.think(5000);
     return { visits: res.visits, ms: Math.round(res.elapsedMs), move: res.move, legal: res.move === -1 ? true : !!d.sim(res.move), workers: d.engine().workers };
   });
-  check('max level: 5s search across 4 workers', maxLevel.visits >= 50000 && maxLevel.legal, JSON.stringify(maxLevel));
+  check('5s search across the worker pool', maxLevel.visits >= 50000 && maxLevel.legal, JSON.stringify(maxLevel));
 
   /* 4. sizes 13/19/25 */
   for (const size of [13, 19, 25]) {
@@ -194,11 +195,47 @@ function check(name, ok, detail) {
   });
   check('3-player legal move', three.legal && three.pc === 3, JSON.stringify(three));
 
+  /* 5b. 4/5/6-player page + engine legality */
+  const multi = await page.evaluate(async () => {
+    const d = window.__hexagoDebug;
+    const out = [];
+    for (const pc of [4, 5, 6]) {
+      d.setAllHuman();
+      document.querySelector('#playerCountBtns [data-count="' + pc + '"]')?.click();
+      d.newGame(9);
+      const res = await d.think(150);
+      const st = d.state();
+      out.push({ pc, move: res.move, legal: res.move === -1 ? true : !!d.sim(res.move), pcState: st.playerCount, visits: res.visits });
+    }
+    return out;
+  });
+  check('4-6 player page/engine legal moves', multi.every(r => r.legal && r.pcState === r.pc && r.visits > 0), JSON.stringify(multi));
+
+  /* 5c. 4/6-player all-AI games actually progress (turn rotation, no errors) */
+  const multiAI = await page.evaluate(async () => {
+    const d = window.__hexagoDebug;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const out = [];
+    d.setAIBudgetMs(120);
+    for (const pc of [4, 6]) {
+      d.setAllAI();
+      document.querySelector('#playerCountBtns [data-count="' + pc + '"]')?.click();
+      d.newGame(9);
+      const t0 = Date.now();
+      while (Date.now() - t0 < 15000 && d.state().board.filter(Boolean).length < pc * 2) await sleep(100);
+      out.push({ pc, stones: d.state().board.filter(Boolean).length, turn: d.state().turn });
+    }
+    d.setAIBudgetMs(150);
+    d.setAllHuman();
+    return out;
+  });
+  check('4-6 player all-AI games progress', multiAI.every(r => r.stones >= r.pc * 2), JSON.stringify(multiAI));
+
   /* 6. AI vs AI progress + event-loop responsiveness */
   await page.evaluate(() => {
     const d = window.__hexagoDebug;
     document.querySelector('#playerCountBtns [data-count="2"]')?.click();
-    document.querySelector('#aiLevelBtns [data-ai="weak"]')?.click();
+    d.setAIBudgetMs(150);
     d.setAllAI();
     d.newGame(9);
     // rAF lag probe while the worker searches

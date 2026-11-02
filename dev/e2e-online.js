@@ -104,6 +104,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     return st.includes('ルームID') && document.querySelectorAll('#roomPool > *').length >= 1;
   }, null, { timeout: 25000 }).then(() => true).catch(() => false);
   check('guest joined and received snapshot', guestPooled);
+  const hostSawGuest = await host.waitForFunction(() => {
+    return [...document.querySelectorAll('#roomPool span')].some(el => el.textContent.includes('guest'));
+  }, null, { timeout: 15000 }).then(() => true).catch(() => false);
+  check('host sees guest in the room pool', hostSawGuest);
 
   // host claims seat 1, guest claims seat 2
   const hostSeat = await host.evaluate(() => {

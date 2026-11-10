@@ -455,27 +455,95 @@
     if (resetScroll) cv.scrollIntoView({ block: 'nearest' });
   }
 
-  // 色の並び順（= 1P,2P,... の割り当て）を入れ替える。iPadでも押しやすいボタン操作。
+  // 色の並び順（= 1P,2P,... の割り当て）を入れ替える。
+  // チップをドラッグ&ドロップ（Pointer Events なので iPad のタッチでも動く）。
+  // ドラッグせずに2回タップした場合は2色を入れ替える。
+  function commitPaletteOrder(colors) {
+    if (!colors || !colors.length) return;
+    st.palette = colors.slice();
+    st.playerCount = st.palette.length;
+    st.pickPalette = null;
+    renderCounts();
+    renderTurnSelect();
+  }
   function movePaletteColor(idx, dir) {
     if (!st.palette) return;
     var to = idx + dir;
     if (to < 0 || to >= st.palette.length) return;
-    var tmp = st.palette[idx];
-    st.palette[idx] = st.palette[to];
-    st.palette[to] = tmp;
-    st.pickPalette = null;
-    renderCounts();
-    renderTurnSelect();
+    var arr = st.palette.slice();
+    var tmp = arr[idx]; arr[idx] = arr[to]; arr[to] = tmp;
+    commitPaletteOrder(arr);
   }
   function swapPaletteColor(a, b) {
     if (!st.palette || a === b) return;
-    var tmp = st.palette[a];
-    st.palette[a] = st.palette[b];
-    st.palette[b] = tmp;
-    st.pickPalette = null;
-    renderCounts();
-    renderTurnSelect();
+    var arr = st.palette.slice();
+    var tmp = arr[a]; arr[a] = arr[b]; arr[b] = tmp;
+    commitPaletteOrder(arr);
   }
+
+  // ---- ドラッグ&ドロップ ----
+  var chipDrag = null;
+  function chipContainer() { return $('photoCounts'); }
+  function paletteChips() {
+    var box = chipContainer();
+    if (!box) return [];
+    return Array.prototype.slice.call(box.querySelectorAll('.photo-color-chip'));
+  }
+  function chipDragStart(e) {
+    var chip = e.currentTarget;
+    if (!chip || !chip.classList.contains('photo-color-chip')) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    chipDrag = {
+      chip: chip, startX: e.clientX, startY: e.clientY,
+      pointerId: e.pointerId, moved: false, lastX: e.clientX
+    };
+    try { chip.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
+    e.preventDefault();
+  }
+  function chipDragMove(e) {
+    if (!chipDrag || !chipDrag.chip) return;
+    var dx = e.clientX - chipDrag.startX;
+    var dy = e.clientY - chipDrag.startY;
+    if (!chipDrag.moved && Math.hypot(dx, dy) > 6) {
+      chipDrag.moved = true;
+      chipDrag.chip.style.zIndex = '20';
+      chipDrag.chip.style.boxShadow = '0 6px 16px rgba(0,0,0,0.25)';
+      chipDrag.chip.style.opacity = '0.95';
+    }
+    if (!chipDrag.moved) return;
+    e.preventDefault();
+    chipDrag.chip.style.transform = 'translateX(' + dx + 'px)';
+    // ポインタ位置に応じて DOM 上でライブ入れ替え
+    var box = chipContainer();
+    var chips = paletteChips().filter(function (c) { return c !== chipDrag.chip; });
+    var target = null;
+    for (var i = 0; i < chips.length; i++) {
+      var r = chips[i].getBoundingClientRect();
+      if (e.clientX < r.left + r.width / 2) { target = chips[i]; break; }
+    }
+    if (target) box.insertBefore(chipDrag.chip, target);
+    else box.appendChild(chipDrag.chip);
+  }
+  function chipDragEnd() {
+    if (!chipDrag) return;
+    var chip = chipDrag.chip, moved = chipDrag.moved;
+    if (chip) {
+      chip.style.transform = '';
+      chip.style.zIndex = '';
+      chip.style.boxShadow = '';
+      chip.style.opacity = '';
+    }
+    chipDrag = null;
+    if (!moved) return;
+    // DOM の並びをパレット順として確定
+    var colors = paletteChips().map(function (c) { return Number(c.dataset.color); });
+    if (colors.length) commitPaletteOrder(colors);
+    // 直後の click を無効化（ドラッグ後のタップ扱いを防ぐ）
+    st.suppressChipClick = Date.now();
+  }
+  document.addEventListener('pointermove', chipDragMove, { passive: false });
+  document.addEventListener('pointerup', chipDragEnd);
+  document.addEventListener('pointercancel', chipDragEnd);
 
   function renderCounts() {
     var el = $('photoCounts');
@@ -493,11 +561,14 @@
     empty.innerHTML = '空 <strong>' + counts[0] + '</strong>';
     el.appendChild(empty);
 
-    // 参加プレイヤーの色 = 並び順がそのまま 1P,2P,...
+    // 参加プレイヤーの色 = 並び順がそのまま 1P,2P,...（ドラッグで入れ替え）
     (st.palette || []).forEach(function (c, idx) {
       var chip = document.createElement('span');
-      chip.className = 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ' +
-        (st.pickPalette === idx ? 'border-neutral-900 bg-neutral-100' : 'border-neutral-300');
+      chip.className = 'photo-color-chip inline-flex items-center gap-1 rounded-full border px-3 py-1.5 ' +
+        'select-none touch-none cursor-grab active:cursor-grabbing ' +
+        (st.pickPalette === idx ? 'border-neutral-900 bg-neutral-100' : 'border-neutral-300 bg-white');
+      chip.dataset.color = String(c);
+      chip.dataset.slot = String(idx + 1);
       var dot = document.createElement('span');
       dot.className = 'dot';
       dot.style.background = CLASS_COLORS[c];
@@ -506,24 +577,9 @@
       var label = document.createElement('span');
       label.innerHTML = CLASS_JA[c] + ' <strong>' + counts[c] + '</strong><span class="opacity-50"> ' + (idx + 1) + 'P</span>';
       chip.appendChild(label);
-      // ◀ / ▶ で順番を入れ替え（タッチでも押せるサイズ）
-      [[-1, '◀'], [1, '▶']].forEach(function (pair) {
-        var b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = pair[1];
-        b.setAttribute('aria-label', (pair[0] < 0 ? '前に移動' : '後ろに移動'));
-        b.className = 'w-8 h-8 -my-1 flex items-center justify-center rounded-full text-xs font-bold ' +
-          'border border-neutral-300 bg-white active:bg-neutral-200 disabled:opacity-25 disabled:active:bg-white';
-        b.disabled = (idx + pair[0] < 0) || (idx + pair[0] >= (st.palette || []).length);
-        b.onclick = function (ev) {
-          ev.stopPropagation();
-          movePaletteColor(idx, pair[0]);
-        };
-        chip.appendChild(b);
-      });
-      // チップ本体をタップ → 2回目にタップした色と入れ替え
-      chip.style.cursor = 'pointer';
+      chip.addEventListener('pointerdown', chipDragStart);
       chip.onclick = function () {
+        if (st.suppressChipClick && Date.now() - st.suppressChipClick < 400) return;
         if (st.pickPalette == null) { st.pickPalette = idx; renderCounts(); }
         else if (st.pickPalette === idx) { st.pickPalette = null; renderCounts(); }
         else { swapPaletteColor(st.pickPalette, idx); }
@@ -555,7 +611,7 @@
       hint.textContent = (st.allColors
         ? '全色モード: 未使用の色を選ぶとプレイヤーとして追加されます（最大6人）。'
         : 'タップで切り替わるのは「空」と参加中の色だけです（全色ボタンで拡張可）。')
-        + ' 色の◀▶で順番（' + order + '）、チップを2回タップで入れ替え。';
+        + ' 色チップはドラッグで並べ替え（2回タップでも入れ替え）。現在: ' + order;
     }
   }
 
@@ -1031,6 +1087,7 @@
     },
     cycle: function (i) { cycleAt(i); return this.state(); },
     moveColor: function (i, dir) { movePaletteColor(i, dir); return this.state(); },
+    setPalette: function (arr) { commitPaletteOrder(arr); return this.state(); },
     swapColors: function (a, b) { swapPaletteColor(a, b); return this.state(); },
     setPlayerCount: function (n) { setPlayerCount(n); renderResult(); return this.state(); },
     setAllColors: function (on) { st.allColors = !!on; var cb = $('photoAllColors'); if (cb) cb.checked = !!on; renderResult(); return this.state(); },

@@ -233,47 +233,53 @@ function check(name, ok, detail) {
       fourPlayers.back.count === 3,
       JSON.stringify(fourPlayers));
 
-    // 3c. 色の順番を入れ替え（1P,2P,... の割り当て）
-    const reorder = await page.evaluate(() => {
-      const before = window.__hexagoPhoto.state();
-      // 青（クラス4）が3Pにいるので、◀ で先頭へ動かす
-      const idxBlue = before.palette.indexOf(4);
-      let st = before;
-      for (let k = idxBlue; k > 0; k--) st = window.__hexagoPhoto.moveColor(k, -1);
-      const entry = window.__hexagoPhoto.entry();
+    // 3c. 色の順番をドラッグ&ドロップで入れ替え（Pointer Events = iPadタッチ対応）
+    const dragReorder = await page.evaluate(() => {
+      const chips = () => Array.from(document.querySelectorAll('#photoCounts .photo-color-chip'));
+      const before = window.__hexagoPhoto.state().palette.slice();
+      const first = chips()[0];
+      const third = chips()[2];
+      const fr = first.getBoundingClientRect();
+      const tr = third.getBoundingClientRect();
+      const fire = (el, type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, clientX: x, clientY: y,
+        pointerId: 1, pointerType: 'touch', isPrimary: true, button: 0
+      }));
+      fire(first, 'pointerdown', fr.left + fr.width / 2, fr.top + fr.height / 2);
+      fire(document, 'pointermove', tr.right + 6, fr.top + fr.height / 2);
+      fire(document, 'pointerup', tr.right + 6, fr.top + fr.height / 2);
+      const after = window.__hexagoPhoto.state().palette.slice();
+      window.__hexagoPhoto.setPalette(before);
+      return { before, after, restored: window.__hexagoPhoto.state().palette.slice() };
+    });
+    check('ドラッグ&ドロップで色の順番を入れ替えられる（タッチ操作）',
+      dragReorder.after.join() === [dragReorder.before[1], dragReorder.before[2], dragReorder.before[0]].join() &&
+      dragReorder.restored.join() === dragReorder.before.join(),
+      JSON.stringify(dragReorder));
+    // チップに矢印ボタンが無い（コンパクト）
+    const chipShape = await page.evaluate(() => {
+      const chips = Array.from(document.querySelectorAll('#photoCounts .photo-color-chip'));
       return {
-        before: before.palette,
-        after: st.palette,
-        slot1Color: entry.colors[1] && entry.colors[1].fill,
-        slot1Name: entry.names[1],
-        playerCount: entry.playerCount,
+        count: chips.length,
+        buttons: document.querySelectorAll('#photoCounts .photo-color-chip button').length,
+        heights: chips.map(c => +c.getBoundingClientRect().height.toFixed(1)),
       };
     });
-    check('◀▶ で色の順番（1Pの色）を入れ替えられる',
-      reorder.before[0] !== reorder.after[0] && reorder.after[0] === 4 && reorder.slot1Name === '青',
-      JSON.stringify(reorder));
+    check('チップは矢印ボタンなしのコンパクト表示',
+      chipShape.count >= 2 && chipShape.buttons === 0 && chipShape.heights.every(h => h <= 44),
+      JSON.stringify(chipShape));
 
-    // チップを2回タップする方式でも入れ替えられる
+    // 2回タップ方式も残っている（swap）
     const swap = await page.evaluate(() => {
       const before = window.__hexagoPhoto.state().palette.slice();
       window.__hexagoPhoto.swapColors(0, 1);
       const after = window.__hexagoPhoto.state().palette.slice();
-      // 元に戻す
       window.__hexagoPhoto.swapColors(0, 1);
       return { before, after, back: window.__hexagoPhoto.state().palette.slice() };
     });
-    check('2回タップで色を入れ替えられる（swap）',
+    check('2回タップでも入れ替えられる（swap）',
       swap.after[0] === swap.before[1] && swap.after[1] === swap.before[0] && swap.back.join() === swap.before.join(),
       JSON.stringify(swap));
-
-    // 既定の並び（黒,白,青）に戻す
-    const restored = await page.evaluate(() => {
-      // [4,1,2] -> [1,2,4]
-      window.__hexagoPhoto.swapColors(0, 1);
-      window.__hexagoPhoto.swapColors(1, 2);
-      return window.__hexagoPhoto.state().palette;
-    });
-    check('並び順を元に戻せる', restored.join() === '1,2,4', JSON.stringify(restored));
 
     // 4. 保存
     const saved = await page.evaluate(() => {
@@ -404,24 +410,36 @@ function check(name, ok, detail) {
       check(vp.name + ' で読み取り結果と操作ボタンが画面内に収まる',
         res3.result && res3.buttonVisible && res3.cardFits,
         JSON.stringify(res3));
-      // 色の並べ替えボタンがタッチで押せる（サイズ・動作）
+      // 色チップのドラッグ&ドロップがタッチで動く（コンパクト・矢印なし）
       const reorderIpad = await ipad.evaluate(() => {
-        const chips = Array.from(document.querySelectorAll('#photoCounts > span'));
-        const paletteChip = chips.find(c => c.querySelector('button'));
-        if (!paletteChip) return { found: false };
-        const btns = paletteChip.querySelectorAll('button');
-        const rects = Array.from(btns).map(b => { const r = b.getBoundingClientRect(); return { w: +r.width.toFixed(1), h: +r.height.toFixed(1) }; });
+        const chips = () => Array.from(document.querySelectorAll('#photoCounts .photo-color-chip'));
+        if (!chips().length) return { found: false };
         const before = window.__hexagoPhoto.state().palette.slice();
-        btns[btns.length - 1].click(); // ▶
+        const first = chips()[0];
+        const chipHeight = +first.getBoundingClientRect().height.toFixed(1);
+        const last = chips()[chips().length - 1];
+        const fr = first.getBoundingClientRect();
+        const lr = last.getBoundingClientRect();
+        const fire = (el, type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+          bubbles: true, cancelable: true, clientX: x, clientY: y,
+          pointerId: 7, pointerType: 'touch', isPrimary: true, button: 0
+        }));
+        fire(first, 'pointerdown', fr.left + fr.width / 2, fr.top + fr.height / 2);
+        fire(document, 'pointermove', lr.right + 6, fr.top + fr.height / 2);
+        fire(document, 'pointerup', lr.right + 6, fr.top + fr.height / 2);
         const after = window.__hexagoPhoto.state().palette.slice();
-        return { found: true, rects, before, after };
+        window.__hexagoPhoto.setPalette(before);
+        return {
+          found: true, before, after,
+          buttons: document.querySelectorAll('#photoCounts .photo-color-chip button').length,
+          chipHeight: chipHeight,
+        };
       });
-      check(vp.name + ' で色の並べ替えボタンがタッチ操作できるサイズで動く',
-        reorderIpad.found && reorderIpad.rects.every(r => r.w >= 30 && r.h >= 30) &&
+      check(vp.name + ' で色チップをドラッグ&ドロップで並べ替えできる',
+        reorderIpad.found && reorderIpad.buttons === 0 && reorderIpad.chipHeight <= 44 &&
         reorderIpad.after.join() !== reorderIpad.before.join(),
         JSON.stringify(reorderIpad));
-      // 元の並びに戻してからスクリーンショットを撮る
-      await ipad.evaluate(() => { window.__hexagoPhoto.moveColor(1, -1); });
+      // 並び順はテスト内で復元済み。スクリーンショットを撮る
       await ipad.screenshot(path.join(shotsDir, 'photo-step3-' + vp.width + 'x' + vp.height + '.png'));
       await ipad.close();
     }

@@ -233,6 +233,72 @@ function check(name, ok, detail) {
       fourPlayers.back.count === 3,
       JSON.stringify(fourPlayers));
 
+    // 3b. ドラッグ中に掴んだチップがポインタに追従する（DOM再配置で座標がズレない）
+    const dragFollow = await page.evaluate(() => {
+      const chips = () => Array.from(document.querySelectorAll('#photoCounts .photo-color-chip'));
+      const before = window.__hexagoPhoto.state().palette.slice();
+      const chip = chips()[0];
+      const fr = chip.getBoundingClientRect();
+      const grabOffset = 10;
+      const startX = fr.left + grabOffset;
+      const fire = (el, type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, clientX: x, clientY: y,
+        pointerId: 3, pointerType: 'touch', isPrimary: true, button: 0
+      }));
+      fire(chip, 'pointerdown', startX, fr.top + fr.height / 2);
+      const targetX = fr.right + 260; // 複数チップをまたぐ距離
+      fire(document, 'pointermove', targetX, fr.top + fr.height / 2);
+      const mid = chip.getBoundingClientRect();
+      const expectedLeft = targetX - grabOffset;
+      const drift = Math.abs(mid.left - expectedLeft);
+      fire(document, 'pointerup', targetX, fr.top + fr.height / 2);
+      window.__hexagoPhoto.setPalette(before);
+      return { drift: +drift.toFixed(1), midLeft: +mid.left.toFixed(1), expectedLeft: +expectedLeft.toFixed(1) };
+    });
+    check('ドラッグ中、掴んだチップはポインタに追従する（座標ズレなし）',
+      dragFollow.drift <= 2, JSON.stringify(dragFollow));
+
+    // 3b-2. 誤って追加した色（プレイヤー）を × で削除できる
+    const removal = await page.evaluate(() => {
+      const before = window.__hexagoPhoto.state();
+      window.__hexagoPhoto.setPalette(before.palette);
+      const chips = () => Array.from(document.querySelectorAll('#photoCounts .photo-color-chip'));
+      // 3つ目の色（青）の × を押す
+      const chip = chips()[2];
+      const delBtn = chip.querySelector('button');
+      delBtn.click();
+      const after = window.__hexagoPhoto.state();
+      const entry = window.__hexagoPhoto.entry();
+      const strayStones = entry.labels.filter(c => c > 0 && before.palette.indexOf(c) >= 0 && after.palette.indexOf(c) < 0).length;
+      window.__hexagoPhoto.setPalette(before.palette);
+      return {
+        beforePalette: before.palette, afterPalette: after.palette,
+        beforePc: before.playerCount, afterPc: after.playerCount,
+        strayStones, restored: window.__hexagoPhoto.state().palette,
+      };
+    });
+    check('× で誤って追加した色（プレイヤー）を削除できる',
+      removal.afterPalette.length === removal.beforePalette.length - 1 &&
+      removal.afterPc === removal.beforePc - 1 && removal.strayStones > 0 &&
+      removal.restored.join() === removal.beforePalette.join(),
+      JSON.stringify(removal));
+
+    // 3b-3. 実戦ですでに投了しているプレイヤーを「投了済み」にできる
+    const resigned = await page.evaluate(() => {
+      const row = document.getElementById('photoOutRow');
+      const btns = Array.from(row.querySelectorAll('button'));
+      const before = window.__hexagoPhoto.state();
+      btns[2].click(); // 3P を投了済みに
+      const after = window.__hexagoPhoto.state();
+      const entry = window.__hexagoPhoto.entry();
+      btns[2].click(); // 戻す
+      return { beforeOut: before.out, afterOut: after.out, entryOut: entry.out, back: window.__hexagoPhoto.state().out };
+    });
+    check('投了済みプレイヤーを指定できる（対局に out として反映）',
+      resigned.afterOut[2] === true && resigned.entryOut[3] === true &&
+      resigned.back[2] === false,
+      JSON.stringify(resigned));
+
     // 3c. 色の順番をドラッグ&ドロップで入れ替え（Pointer Events = iPadタッチ対応）
     const dragReorder = await page.evaluate(() => {
       const chips = () => Array.from(document.querySelectorAll('#photoCounts .photo-color-chip'));
@@ -259,14 +325,17 @@ function check(name, ok, detail) {
     // チップに矢印ボタンが無い（コンパクト）
     const chipShape = await page.evaluate(() => {
       const chips = Array.from(document.querySelectorAll('#photoCounts .photo-color-chip'));
+      const arrowText = chips.some(c => /◀|▶/.test(c.textContent));
+      const delBtns = chips.every(c => c.querySelectorAll('button').length === 1 && c.querySelector('button').textContent === '×');
       return {
         count: chips.length,
-        buttons: document.querySelectorAll('#photoCounts .photo-color-chip button').length,
+        arrowText,
+        delBtns,
         heights: chips.map(c => +c.getBoundingClientRect().height.toFixed(1)),
       };
     });
-    check('チップは矢印ボタンなしのコンパクト表示',
-      chipShape.count >= 2 && chipShape.buttons === 0 && chipShape.heights.every(h => h <= 44),
+    check('チップは矢印なし・削除×のみのコンパクト表示',
+      chipShape.count >= 2 && !chipShape.arrowText && chipShape.delBtns && chipShape.heights.every(h => h <= 44),
       JSON.stringify(chipShape));
 
     // 2回タップ方式も残っている（swap）
@@ -431,12 +500,13 @@ function check(name, ok, detail) {
         window.__hexagoPhoto.setPalette(before);
         return {
           found: true, before, after,
-          buttons: document.querySelectorAll('#photoCounts .photo-color-chip button').length,
+          arrows: /◀|▶/.test(document.getElementById('photoCounts').textContent),
+          delBtns: Array.from(document.querySelectorAll('#photoCounts .photo-color-chip')).every(c => c.querySelector('button')),
           chipHeight: chipHeight,
         };
       });
       check(vp.name + ' で色チップをドラッグ&ドロップで並べ替えできる',
-        reorderIpad.found && reorderIpad.buttons === 0 && reorderIpad.chipHeight <= 44 &&
+        reorderIpad.found && !reorderIpad.arrows && reorderIpad.delBtns && reorderIpad.chipHeight <= 44 &&
         reorderIpad.after.join() !== reorderIpad.before.join(),
         JSON.stringify(reorderIpad));
       // 並び順はテスト内で復元済み。スクリーンショットを撮る

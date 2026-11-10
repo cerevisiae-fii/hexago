@@ -1,6 +1,6 @@
 // ===== デバッグ用フック（E2E 検証・AI 性能確認用。UI には影響しない） =====
 window.__hexagoDebug = {
-  state: () => ({ board: G.board.slice(), turn: G.turn, over: G.over, phase: G.phase, playerCount: G.playerCount, size: G.size, seats: seats.slice(), mode, aiBusy, aiBudget: aiBudgetMs(), seen: G.seen.length, lastAI: lastAIStats }),
+  state: () => ({ board: G.board.slice(), turn: G.turn, over: G.over, phase: G.phase, playerCount: G.playerCount, size: G.size, seats: seats.slice(), mode, aiBusy, aiBudget: aiBudgetMs(), seen: G.seen.length, lastAI: lastAIStats, out: G.out.slice() }),
   think: (budget) => aiThink(aiStateSnapshot(), budget || aiBudgetMs()),
   engine: () => ({ worker: aiPool.length > 0, workers: aiPool.length, wantWorkers: aiPoolWant(), error: aiWorkerError, loaded: aiEngineLoaded(), workerUrl: AI_WORKER_URL }),
   setAIBudgetMs: (ms) => { aiTestBudgetMs = ms == null ? null : Math.max(1, ms | 0); return aiBudgetMs(); },

@@ -20,7 +20,7 @@
     size: 13, margin: 0.577,
     result: null, labels: null, activeSize: 13,
     drag: -1, hover: -1, turn: 1, modelTried: false,
-    palette: null, playerCount: 2, allColors: false, pickPalette: null
+    palette: null, playerCount: 2, allColors: false, pickPalette: null, outColors: {}
   };
 
   // ---------------- 画面切り替え ----------------
@@ -297,6 +297,7 @@
         if (allToggle) allToggle.checked = false;
         st.palette = suggestPalette(st.labels);
         st.playerCount = st.palette.length;
+        st.outColors = {};
         view('step3');
         renderResult(true);
       } catch (e) {
@@ -451,6 +452,7 @@
       }
     }
     renderCounts();
+    renderOutRow();
     renderTurnSelect();
     if (resetScroll) cv.scrollIntoView({ block: 'nearest' });
   }
@@ -474,6 +476,16 @@
     var tmp = arr[idx]; arr[idx] = arr[to]; arr[to] = tmp;
     commitPaletteOrder(arr);
   }
+  function removePaletteColor(idx) {
+    if (!st.palette || st.palette.length <= 2) return;
+    var removed = st.palette[idx];
+    var arr = st.palette.slice();
+    arr.splice(idx, 1);
+    if (st.outColors) delete st.outColors[removed];
+    st.pickPalette = null;
+    commitPaletteOrder(arr);
+    toast(CLASS_JA[removed] + 'をプレイヤーから外しました（石は空点扱い・タップで修正できます）');
+  }
   function swapPaletteColor(a, b) {
     if (!st.palette || a === b) return;
     var arr = st.palette.slice();
@@ -493,9 +505,11 @@
     var chip = e.currentTarget;
     if (!chip || !chip.classList.contains('photo-color-chip')) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    var rect = chip.getBoundingClientRect();
     chipDrag = {
       chip: chip, startX: e.clientX, startY: e.clientY,
-      pointerId: e.pointerId, moved: false, lastX: e.clientX
+      pointerId: e.pointerId, moved: false, lastX: e.clientX,
+      grabOffsetX: e.clientX - rect.left, tx: 0
     };
     try { chip.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
     e.preventDefault();
@@ -512,8 +526,7 @@
     }
     if (!chipDrag.moved) return;
     e.preventDefault();
-    chipDrag.chip.style.transform = 'translateX(' + dx + 'px)';
-    // ポインタ位置に応じて DOM 上でライブ入れ替え
+    // 1) ポインタ位置に応じて DOM を並べ替える（他のチップの矩形は transform の影響を受けない）
     var box = chipContainer();
     var chips = paletteChips().filter(function (c) { return c !== chipDrag.chip; });
     var target = null;
@@ -523,6 +536,12 @@
     }
     if (target) box.insertBefore(chipDrag.chip, target);
     else box.appendChild(chipDrag.chip);
+    // 2) 並べ替え後のレイアウト位置に対して、掴んだ点がポインタの下に来るよう変位を再計算する
+    //    （再配置で矩形が変わるので、現在の変位を引いた「素の位置」を基準にする）
+    var rect = chipDrag.chip.getBoundingClientRect();
+    var baseLeft = rect.left - (chipDrag.tx || 0);
+    chipDrag.tx = (e.clientX - chipDrag.grabOffsetX) - baseLeft;
+    chipDrag.chip.style.transform = 'translateX(' + chipDrag.tx + 'px)';
   }
   function chipDragEnd() {
     if (!chipDrag) return;
@@ -533,6 +552,7 @@
       chip.style.boxShadow = '';
       chip.style.opacity = '';
     }
+    if (chipDrag && chipDrag.chip === chip) chipDrag.tx = 0;
     chipDrag = null;
     if (!moved) return;
     // DOM の並びをパレット順として確定
@@ -577,6 +597,16 @@
       var label = document.createElement('span');
       label.innerHTML = CLASS_JA[c] + ' <strong>' + counts[c] + '</strong><span class="opacity-50"> ' + (idx + 1) + 'P</span>';
       chip.appendChild(label);
+      // 色（プレイヤー）を外す。誤って追加した色を削除できる。
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '×';
+      del.setAttribute('aria-label', CLASS_JA[c] + 'をプレイヤーから外す');
+      del.disabled = (st.palette || []).length <= 2;
+      del.className = 'w-6 h-6 -my-1 -mr-1 flex items-center justify-center rounded-full text-[11px] font-bold ' +
+        'text-neutral-400 hover:text-red-600 hover:bg-red-50 active:bg-red-100 disabled:opacity-20';
+      del.onclick = function (ev) { ev.stopPropagation(); removePaletteColor(idx); };
+      chip.appendChild(del);
       chip.addEventListener('pointerdown', chipDragStart);
       chip.onclick = function () {
         if (st.suppressChipClick && Date.now() - st.suppressChipClick < 400) return;
@@ -615,10 +645,57 @@
     }
   }
 
+  // 実戦ですでに投了しているプレイヤーを「投了済み」として記録する。
+  function renderOutRow() {
+    var el = $('photoOutRow');
+    if (!el) return;
+    el.innerHTML = '';
+    if (!st.palette || !st.palette.length) return;
+    var activeCount = 0;
+    st.palette.forEach(function (c) { if (!st.outColors[c]) activeCount++; });
+    var label = document.createElement('span');
+    label.className = 'opacity-60';
+    label.textContent = '投了済み:';
+    el.appendChild(label);
+    st.palette.forEach(function (c, idx) {
+      var out = !!st.outColors[c];
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-bold ' +
+        (out ? 'bg-red-600 text-white border-red-600' : 'bg-white text-neutral-600 border-neutral-300 active:bg-neutral-100') +
+        ((!out && activeCount <= 1) ? ' opacity-40' : '');
+      b.disabled = (!out && activeCount <= 1);
+      b.innerHTML = '<span class="dot" style="background:' + CLASS_COLORS[c] + ';border-color:#333"></span>' + (idx + 1) + 'P ' + CLASS_JA[c];
+      b.onclick = function () {
+        if (!st.outColors[c]) {
+          if (activeCount <= 1) return;
+          st.outColors[c] = true;
+        } else {
+          delete st.outColors[c];
+        }
+        renderOutRow();
+        renderTurnSelect();
+      };
+      el.appendChild(b);
+    });
+    if (activeCount <= 1) {
+      var note = document.createElement('span');
+      note.className = 'opacity-50';
+      note.textContent = '（最後の1人は投了にできません）';
+      el.appendChild(note);
+    }
+  }
+
   function renderTurnSelect() {
     var sel = $('photoTurn');
     if (!sel) return;
     var pc = Math.max(2, Math.min(6, st.playerCount || 2));
+    var active = [];
+    for (var i2 = 0; i2 < pc; i2++) {
+      var c2 = st.palette ? st.palette[i2] : null;
+      if (c2 == null || !st.outColors[c2]) active.push(i2 + 1);
+    }
+    if (active.length && active.indexOf(st.turn) < 0) st.turn = active[0];
     var opts = '';
     for (var p = 1; p <= pc; p++) {
       opts += '<option value="' + p + '"' + (p === st.turn ? ' selected' : '') + '>' + p + 'P</option>';
@@ -694,6 +771,8 @@
     });
     var dropped = 0;
     for (var i = 0; i < labels.length; i++) if (labels[i] > 0 && !slot[labels[i]]) dropped++;
+    var outArr = [false];
+    palette.forEach(function (c) { outArr.push(!!st.outColors[c]); });
     // 手番を有効なプレイヤーに丸める
     var turn = Math.min(pc, Math.max(1, st.turn || 1));
     var name = (st.fileName || '写真').replace(/\.[^.]+$/, '');
@@ -705,6 +784,7 @@
       colors: colors,
       names: names,
       labels: labels,
+      out: outArr,
       turn: turn,
       meta: {
         convention: res.convention,
@@ -797,7 +877,13 @@
       G.passes = 0;
       G.dead = [];
       G.damage = Array(playerCount + 1).fill(0);
-      G.out = Array(playerCount + 1).fill(false);
+      G.out = (entry.out && entry.out.length >= playerCount + 1)
+        ? entry.out.slice(0, playerCount + 1)
+        : Array(playerCount + 1).fill(false);
+      G.out[0] = false;
+      if (G.out[G.turn]) {
+        for (var oi = 1; oi <= playerCount; oi++) { if (!G.out[oi]) { G.turn = oi; break; } }
+      }
       G.hist = [];
       G.seen = [hash(G.board)];
       setSeen();
@@ -931,7 +1017,7 @@
   function reset() {
     st.result = null; st.labels = null; st.drag = -1; st.hover = -1;
     st.corners = null; st.imageData = null; st.img = null; st.fileName = '';
-    st.palette = null; st.playerCount = 2; st.allColors = false; st.pickPalette = null;
+    st.palette = null; st.playerCount = 2; st.allColors = false; st.pickPalette = null; st.outColors = {};
     st.margin = 0.577;
     var ms = $('photoMargin'); if (ms) ms.value = '0.58';
     var ml = $('photoMarginLabel'); if (ml) ml.textContent = '0.58 cell';
@@ -1082,6 +1168,7 @@
         corners: st.corners, turn: st.turn,
         palette: st.palette ? st.palette.slice() : null,
         playerCount: st.playerCount, allColors: st.allColors,
+        out: (st.palette || []).map(function (c) { return !!st.outColors[c]; }),
         allowed: allowedColors()
       };
     },

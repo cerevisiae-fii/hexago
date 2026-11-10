@@ -20,7 +20,7 @@
     size: 13, margin: 0.577,
     result: null, labels: null, activeSize: 13,
     drag: -1, hover: -1, turn: 1, modelTried: false,
-    palette: null, playerCount: 2, allColors: false
+    palette: null, playerCount: 2, allColors: false, pickPalette: null
   };
 
   // ---------------- 画面切り替え ----------------
@@ -292,6 +292,7 @@
         st.activeSize = st.size;
         st.turn = 1;
         st.allColors = false;
+        st.pickPalette = null;
         var allToggle = $('photoAllColors');
         if (allToggle) allToggle.checked = false;
         st.palette = suggestPalette(st.labels);
@@ -454,6 +455,28 @@
     if (resetScroll) cv.scrollIntoView({ block: 'nearest' });
   }
 
+  // 色の並び順（= 1P,2P,... の割り当て）を入れ替える。iPadでも押しやすいボタン操作。
+  function movePaletteColor(idx, dir) {
+    if (!st.palette) return;
+    var to = idx + dir;
+    if (to < 0 || to >= st.palette.length) return;
+    var tmp = st.palette[idx];
+    st.palette[idx] = st.palette[to];
+    st.palette[to] = tmp;
+    st.pickPalette = null;
+    renderCounts();
+    renderTurnSelect();
+  }
+  function swapPaletteColor(a, b) {
+    if (!st.palette || a === b) return;
+    var tmp = st.palette[a];
+    st.palette[a] = st.palette[b];
+    st.palette[b] = tmp;
+    st.pickPalette = null;
+    renderCounts();
+    renderTurnSelect();
+  }
+
   function renderCounts() {
     var el = $('photoCounts');
     if (!el) return;
@@ -463,12 +486,51 @@
       var pt = st.result.points[i];
       if ((pt.margin != null ? pt.margin : pt.conf) < 0.10 || pt.conf < 0.42) low++;
     }
-    var html = ['<span class="opacity-60">空 <strong>' + counts[0] + '</strong></span>'];
-    // 参加プレイヤーの色（パレット）を先に、1P..NP の順で表示
+    el.innerHTML = '';
+
+    var empty = document.createElement('span');
+    empty.className = 'opacity-60';
+    empty.innerHTML = '空 <strong>' + counts[0] + '</strong>';
+    el.appendChild(empty);
+
+    // 参加プレイヤーの色 = 並び順がそのまま 1P,2P,...
     (st.palette || []).forEach(function (c, idx) {
-      html.push('<span class="inline-flex items-center gap-1"><span class="dot" style="background:' + CLASS_COLORS[c] + ';border-color:#333"></span>' + CLASS_JA[c] + ' <strong>' + counts[c] + '</strong><span class="opacity-50">' + (idx + 1) + 'P</span></span>');
+      var chip = document.createElement('span');
+      chip.className = 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ' +
+        (st.pickPalette === idx ? 'border-neutral-900 bg-neutral-100' : 'border-neutral-300');
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = CLASS_COLORS[c];
+      dot.style.borderColor = '#333';
+      chip.appendChild(dot);
+      var label = document.createElement('span');
+      label.innerHTML = CLASS_JA[c] + ' <strong>' + counts[c] + '</strong><span class="opacity-50"> ' + (idx + 1) + 'P</span>';
+      chip.appendChild(label);
+      // ◀ / ▶ で順番を入れ替え（タッチでも押せるサイズ）
+      [[-1, '◀'], [1, '▶']].forEach(function (pair) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = pair[1];
+        b.setAttribute('aria-label', (pair[0] < 0 ? '前に移動' : '後ろに移動'));
+        b.className = 'w-8 h-8 -my-1 flex items-center justify-center rounded-full text-xs font-bold ' +
+          'border border-neutral-300 bg-white active:bg-neutral-200 disabled:opacity-25 disabled:active:bg-white';
+        b.disabled = (idx + pair[0] < 0) || (idx + pair[0] >= (st.palette || []).length);
+        b.onclick = function (ev) {
+          ev.stopPropagation();
+          movePaletteColor(idx, pair[0]);
+        };
+        chip.appendChild(b);
+      });
+      // チップ本体をタップ → 2回目にタップした色と入れ替え
+      chip.style.cursor = 'pointer';
+      chip.onclick = function () {
+        if (st.pickPalette == null) { st.pickPalette = idx; renderCounts(); }
+        else if (st.pickPalette === idx) { st.pickPalette = null; renderCounts(); }
+        else { swapPaletteColor(st.pickPalette, idx); }
+      };
+      el.appendChild(chip);
     });
-    // パレット外の色（人数に入っていない色）は注意表示
+
     var stray = [];
     for (var c = 1; c < 8; c++) {
       if (!counts[c]) continue;
@@ -476,15 +538,24 @@
       stray.push(CLASS_JA[c] + ' ' + counts[c] + '点');
     }
     if (stray.length) {
-      html.push('<span class="text-amber-700 font-bold">未使用色: ' + stray.join(' / ') + '（空点扱い・タップで修正）</span>');
+      var stw = document.createElement('span');
+      stw.className = 'text-amber-700 font-bold';
+      stw.textContent = '未使用色: ' + stray.join(' / ') + '（空点扱い・タップで修正）';
+      el.appendChild(stw);
     }
-    el.innerHTML = html.join('');
-    if (low) el.innerHTML += '<span class="text-amber-600 font-bold">要確認 ' + low + '点</span>';
+    if (low) {
+      var lw = document.createElement('span');
+      lw.className = 'text-amber-600 font-bold';
+      lw.textContent = '要確認 ' + low + '点';
+      el.appendChild(lw);
+    }
     var hint = $('photoColorHint');
     if (hint) {
-      hint.textContent = st.allColors
-        ? '全色モード: 未使用の色を選ぶとプレイヤーとして追加されます（最大6人）'
-        : 'タップで切り替わるのは「空」と参加中の色だけです（全色ボタンで拡張可）';
+      var order = (st.palette || []).map(function (c, i) { return (i + 1) + 'P=' + CLASS_JA[c]; }).join(' ');
+      hint.textContent = (st.allColors
+        ? '全色モード: 未使用の色を選ぶとプレイヤーとして追加されます（最大6人）。'
+        : 'タップで切り替わるのは「空」と参加中の色だけです（全色ボタンで拡張可）。')
+        + ' 色の◀▶で順番（' + order + '）、チップを2回タップで入れ替え。';
     }
   }
 
@@ -804,7 +875,7 @@
   function reset() {
     st.result = null; st.labels = null; st.drag = -1; st.hover = -1;
     st.corners = null; st.imageData = null; st.img = null; st.fileName = '';
-    st.palette = null; st.playerCount = 2; st.allColors = false;
+    st.palette = null; st.playerCount = 2; st.allColors = false; st.pickPalette = null;
     st.margin = 0.577;
     var ms = $('photoMargin'); if (ms) ms.value = '0.58';
     var ml = $('photoMarginLabel'); if (ml) ml.textContent = '0.58 cell';
@@ -959,6 +1030,8 @@
       };
     },
     cycle: function (i) { cycleAt(i); return this.state(); },
+    moveColor: function (i, dir) { movePaletteColor(i, dir); return this.state(); },
+    swapColors: function (a, b) { swapPaletteColor(a, b); return this.state(); },
     setPlayerCount: function (n) { setPlayerCount(n); renderResult(); return this.state(); },
     setAllColors: function (on) { st.allColors = !!on; var cb = $('photoAllColors'); if (cb) cb.checked = !!on; renderResult(); return this.state(); },
     loadImageData: function (imageData) { setupImageFromData(imageData); },

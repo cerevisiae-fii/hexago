@@ -23,7 +23,7 @@
 (function (globalScope) {
   'use strict';
 
-  var VERSION = 'hexago-mcts/2.0.0';
+  var VERSION = 'hexago-mcts/2.1.0';
 
   /* ------------------------------------------------------------------ *
    *  Utilities
@@ -123,14 +123,16 @@
       }
     }
     r2off[n] = r2flat.length; r3off[n] = r3flat.length;
-    // opening anchors: centre, hex-distance-2 ring, and the 6 axis points at distance 3
+    // opening anchors: centre, hex-distance-2 ring, and 6 axis points at a
+    // board-scaled distance (3-line corner analogues; 4/5-line on 19/25).
+    var anchorDist = radius >= 12 ? 5 : (radius >= 9 ? 4 : 3);
     var anchors = [];
     var anchorSeen = Object.create(null);
     var center = map['0,0'];
     anchors.push(center); anchorSeen[center] = 1;
     for (b = 0; b < n; b++) if (distMat[center * n + b] === 2 && !anchorSeen[b]) { anchors.push(b); anchorSeen[b] = 1; }
     for (d = 0; d < 6; d++) {
-      var ai = map[(DIRS[d][0] * 3) + ',' + (DIRS[d][1] * 3)];
+      var ai = map[(DIRS[d][0] * anchorDist) + ',' + (DIRS[d][1] * anchorDist)];
       if (ai !== undefined && !anchorSeen[ai]) { anchors.push(ai); anchorSeen[ai] = 1; }
     }
     var g = {
@@ -214,6 +216,7 @@
     var terrStamp = new Int32Array(n), terrId = 0, terrQueue = new Int16Array(n);
     var terrOwner = new Int8Array(n);      // 0 neutral, p>0 = region bordered only by p
     var terrColorCount = new Int8Array(n); // number of border colours of the region
+    var terrColMask = new Int8Array(n);    // bit mask of the region's border colours
     var terrSize = new Int16Array(n);      // size (points) of the empty region
     var rootPat = new Int16Array(n);       // hex pattern score per root move
     var rootUseful = new Uint8Array(n);    // 1 = the root move gains something
@@ -229,6 +232,46 @@
     var curC = UCT_C;
     var TERR_SMALL = Math.max(6, (n * 0.12) | 0);   // clearly enclosed: eye / tiny territory
     var TERR_SETTLE = Math.max(TERR_SMALL, (n * 0.25) | 0); // late-game medium territory
+
+    /* ---------------- v2.1: static gain, viability, attack info ---------------- */
+    // 面積得点(地+石)の差分で「意味のある手」を判定するための作業領域。
+    var GAIN_W = 120;                                 // ordering weight per static point
+    var V_MIN = Math.max(8, Math.round(n * 0.06));    // smallest region where a lone stone could even try to live
+    // Small boards (<= 80 pts) have short, thin walls: nearly any single-colour
+    // region is reducable, so the deep-invasion threshold is much lower there.
+    // Measured: the 30%-of-board threshold cost strength on the 61-point board
+    // (frozen v2.0.0 out-invaded us 19:8 there at 800 ms).
+    var V_DEEP = n <= 80 ? Math.max(9, Math.round(n * 0.15)) : Math.max(14, Math.round(n * 0.30));
+    var gainBoard = new Int8Array(n);                 // hypothetical board for one move
+    var gainSc = new Int16Array(9);                   // scores after the hypothetical move
+    var baseSc = new Int16Array(9);                   // S0: scores if everyone passes now
+    var ownGain = new Int16Array(n);                  // static score gain of each root move
+    var mvViable = new Uint8Array(n);                // 1 = invasion could live (not obvious dead)
+    var mvUseful = new Uint8Array(n);                // 1 = changes score / stabilizes (search candidate)
+    var mvSave = new Int16Array(n);                   // own atari groups rescued by the move
+    var mvStab = new Uint8Array(n);                   // 1 = adjacent own group has <= 2 liberties
+    var atkW = new Float64Array(8);                   // per-colour attack weight (multiplayer: hit the leader)
+    var atkB = new Int16Array(n);                     // attack ordering bonus per root move
+    var atkLibs = new Int16Array(n), atkSize = new Int16Array(n), atkEyes = new Int8Array(n);
+    var atkL1 = new Int16Array(n), atkL2 = new Int16Array(n); // liberty points of <=2-lib groups
+    var atkStamp = new Int32Array(n), atkId = 0;
+    var enemyNear = new Int16Array(n);                // per-point hex distance to the nearest stone of colour e (BFS)
+    var bfsQueue = new Int16Array(n * 2);
+    var dameExists = false;                           // any 2+-colour empty region left (someone can still gain)
+    var enemyThreat = false;                          // an opponent still has a score-changing move
+    var GAIN_POLICY = opts.gainPolicy !== false;      // master switch (A/B)
+    // Measured: adding 2-lib enemy pressure to the playout policy and attack
+    // points to tree expansion both COST strength at equal budget (like every
+    // previous playout experiment in section 10).  They stay opt-in for A/B.
+    var PLAYOUT_ATK = opts.playoutAtk === true;       // 2-lib pressure in playouts (A/B)
+    var TREE_ATK = opts.treeAtk === true;             // weak-group liberties in buildUntried (A/B)
+    var ATK_ORDER = opts.atkOrder !== false;          // attack ordering bonus (A/B)
+    // Root candidate restriction costs strength at high budgets (the search
+    // needs full freedom to prove deep invasions; measured 62.5% vs 37.5% vs
+    // frozen v2.0.0 at 800 ms on the 61-point board).  Default OFF; behaviour
+    // is instead guaranteed by the final-selection guards + the pass gate.
+    var RESTRICT_CAND = opts.restrictCand === true;  // root candidates = useful moves only (A/B)
+    var SELF_ATARI_REJECT = (opts.playerCount | 0) >= 4 ? 0.99 : 0.95;
 
     function pop6(m) { var c = 0; while (m) { m &= m - 1; c++; } return c; }
     function cycDiff(a, b) { var d = a - b; if (d < 0) d = -d; return d > 3 ? 6 - d : d; }
@@ -288,6 +331,7 @@
 
     function computeTerritory(board, pc) {
       terrId++;
+      dameExists = false;
       var i, j, je, t, v, k, s, qn, mask, cnt, owner, p;
       for (i = 0; i < n; i++) {
         if (board[i] !== 0 || terrStamp[i] === terrId) continue;
@@ -302,6 +346,7 @@
           }
         }
         cnt = pop6(mask); owner = 0;
+        if (cnt >= 2) dameExists = true;
         // Only SMALL, single-colour-bordered regions are settled territory/eyes.
         // A large region (even if only our own stones border it) is still open:
         // treating it as settled made the engine ignore defence there and lose
@@ -309,7 +354,10 @@
         if (cnt === 1 && (qn <= TERR_SMALL || (stoneCountRoot >= n * 0.6 && qn <= TERR_SETTLE))) {
           for (p = 1; p <= pc; p++) if (mask & (1 << p)) { owner = p; break; }
         }
-        for (k = 0; k < qn; k++) { terrOwner[terrQueue[k]] = owner; terrColorCount[terrQueue[k]] = cnt; terrSize[terrQueue[k]] = qn; }
+        for (k = 0; k < qn; k++) {
+          terrOwner[terrQueue[k]] = owner; terrColorCount[terrQueue[k]] = cnt;
+          terrColMask[terrQueue[k]] = mask; terrSize[terrQueue[k]] = qn;
+        }
       }
     }
 
@@ -319,6 +367,134 @@
       for (j = ring2Off[i], je = ring2Off[i + 1]; j < je; j++) if (board[ring2Flat[j]] !== 0) return 2;
       for (j = ring3Off[i], je = ring3Off[i + 1]; j < je; j++) if (board[ring3Flat[j]] !== 0) return 3;
       return 4;
+    }
+
+    // hex distance to the nearest own stone, up to maxD (99 = farther).
+    function nearestOwnWithin(board, i, p, maxD) {
+      var j, je;
+      for (j = nbOff[i], je = nbOff[i + 1]; j < je; j++) if (board[nbFlat[j]] === p) return 1;
+      if (maxD < 2) return 99;
+      for (j = ring2Off[i], je = ring2Off[i + 1]; j < je; j++) if (board[ring2Flat[j]] === p) return 2;
+      if (maxD < 3) return 99;
+      for (j = ring3Off[i], je = ring3Off[i + 1]; j < je; j++) if (board[ring3Flat[j]] === p) return 3;
+      return 99;
+    }
+
+    // enemyNear[i] = hex distance from i to the nearest stone of `colour`
+    // (BFS, capped at maxD; 99 when farther). Used for invasion-support tests.
+    function fillColorNear(board, colour, maxD) {
+      var i, j, je, t, head, tail, layerEnd, d;
+      for (i = 0; i < n; i++) enemyNear[i] = 99;
+      head = 0; tail = 0;
+      for (i = 0; i < n; i++) if (board[i] === colour) { enemyNear[i] = 0; bfsQueue[tail++] = i; }
+      for (d = 0; d < maxD && head < tail; d++) {
+        layerEnd = tail;
+        while (head < layerEnd) {
+          var s = bfsQueue[head++];
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            t = nbFlat[j];
+            if (enemyNear[t] > d + 1) { enemyNear[t] = d + 1; if (d + 1 < maxD) bfsQueue[tail++] = t; }
+          }
+        }
+      }
+    }
+
+    // S0 baseline: the area score each player gets if everyone passes right now
+    // (conservative dead-stone removal, exactly like the page's scoring).
+    function computeBaseline(pc) {
+      gainBoard.set(srcBoard);
+      removeDeadStones(gainBoard);
+      scoreBoardInto(gainBoard, baseSc, pc);
+    }
+
+    // Static score gain of playing `mv`: place, clean dead stones, score,
+    // and subtract the pass-now baseline. Own-territory fills are 0, dame +1,
+    // captures count exactly, dead invasions die in the cleanup.
+    function staticGainFor(mv, p, pc) {
+      gainBoard.set(srcBoard);
+      capCount = 0;
+      if (!applyMove(gainBoard, mv, p)) { capCount = 0; return -32768; }
+      capCount = 0;
+      removeDeadStones(gainBoard);
+      scoreBoardInto(gainBoard, gainSc, pc);
+      return gainSc[p] - baseSc[p];
+    }
+
+    // Group table for the root position: per-stone liberties/size/eyes.
+    // Feeds (i) the attack-ordering bonus on weak enemy groups and
+    // (ii) own-weakness detection for the pass gate. Returns ownWeak:
+    // true when we have a group with <= 2 liberties and < 2 eyes.
+    function computeAttackInfo(turn, pc) {
+      atkId++;
+      var i, j, k, c, gi, libs, eyes, gid, e, best, worst;
+      best = -1; worst = -1;
+      for (e = 1; e <= pc; e++) {
+        if (e === turn || outFlags[e]) continue;
+        if (best < 0 || baseSc[e] > baseSc[best]) best = e;
+        if (worst < 0 || baseSc[e] < baseSc[worst]) worst = e;
+      }
+      for (e = 1; e <= pc; e++) atkW[e] = 1;
+      if (pc >= 3 && best > 0) atkW[best] = 1.25;                       // hit the leader
+      if (pc >= 3 && worst > 0 && worst !== best) atkW[worst] = 0.7;   // spare the last
+      var ownWeak = false, hasEnemy = false;
+      for (i = 0; i < n; i++) {
+        c = srcBoard[i];
+        if (c !== 0 && c !== turn) hasEnemy = true;
+        if (c === 0 || atkStamp[i] === atkId) continue;
+        libs = scanGroupFull(srcBoard, i, c);
+        gi = grpN;
+        gid = ++dsGroupId;
+        for (k = 0; k < gi; k++) { atkStamp[grpBuf[k]] = atkId; dsGMark[grpBuf[k]] = gid; }
+        eyes = groupEyeCount(srcBoard, c, gid);
+        for (k = 0; k < gi; k++) { atkLibs[grpBuf[k]] = libs; atkSize[grpBuf[k]] = gi; atkEyes[grpBuf[k]] = eyes; }
+        if (libs <= 2) {
+          for (k = 0; k < gi; k++) {
+            atkL1[grpBuf[k]] = libs >= 1 ? dsLibs[0] : -1;
+            atkL2[grpBuf[k]] = libs >= 2 ? dsLibs[1] : -1;
+          }
+        }
+        // a <=2-lib group is only a pass-blocking weakness when an opponent
+        // is actually on the board to capture it (degenerate no-enemy boards
+        // must still pass as frozen).
+        if (c === turn && libs <= 2 && eyes < 2 && hasEnemy) ownWeak = true;
+      }
+      return ownWeak;
+    }
+
+    // Ordering bonus for moves that pressure a weak enemy group (its liberty).
+    // Scaled by the group's size and by atkW (multiplayer: attack the leader).
+    // A "certain kill" (their other liberty is fully enclosed, so after this
+    // move their only save is suicide) is worth the full capture in ordering:
+    // playout noise on big open boards can hide an N-stone capture otherwise.
+    function atkBonusAt(mv, turn) {
+      var j, je, s, c, b = 0;
+      for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
+        s = nbFlat[j]; c = srcBoard[s];
+        if (c === 0 || c === turn) continue;
+        if (atkLibs[s] > 3 || atkEyes[s] >= 2) continue;
+        var dup = false;
+        for (var j2 = nbOff[mv]; j2 < j; j2++) {
+          var s0 = nbFlat[j2];
+          if (srcBoard[s0] === c && dsGMark[s0] === dsGMark[s]) { dup = true; break; }
+        }
+        if (dup) continue;
+        var w = atkLibs[s] === 1 ? 6 : (atkLibs[s] === 2 ? 4 : 1.5);
+        b += w * Math.min(atkSize[s], 12) * atkW[c];
+        // certain kill: group at 2 libs, this move takes one, the other liberty
+        // has no empty neighbour left -> their group is dead next turn.
+        if (atkLibs[s] === 2 && rootLibs[mv] >= 2) {
+          var lp2 = atkL1[s] === mv ? atkL2[s] : atkL1[s];
+          if (lp2 >= 0) {
+            var open = 0, j3, je3;
+            for (j3 = nbOff[lp2], je3 = nbOff[lp2 + 1]; j3 < je3; j3++) {
+              var t3 = nbFlat[j3];
+              if (srcBoard[t3] === 0 && t3 !== mv) open++;
+            }
+            if (open === 0) b += Math.min(atkSize[s], 12) * 80 * atkW[c];
+          }
+        }
+      }
+      return (b * 24) | 0;
     }
 
     function buildGlobalCandidates() {
@@ -341,12 +517,21 @@
       }
     }
 
-    // Classify every root move: does it gain anything (capture/save/connection/
-    // cut/safe neutral point)?  If nothing gains, passing is the right move.
+    // Classify every root move.  v2.1 gain policy: a move is a search candidate
+    // only when it changes the area score (static gain vs the pass-now baseline),
+    // rescues/stabilizes own weak groups, or attacks/threatens an enemy group.
+    // Invasions of small or supportless enemy regions are dead stones -> gain 0.
+    // Legacy v2 classification is kept under opts.gainPolicy=false for A/B.
     function classifyRootMoves(legal, turn) {
       computeTerritory(srcBoard, pcCur);
+      var ownWeak = false;
+      if (GAIN_POLICY) {
+        computeBaseline(pcCur);
+        ownWeak = computeAttackInfo(turn, pcCur);
+      }
       noUsefulRoot = true;
       var i, mv, j, je, ownN, enN, useful, owner, eye;
+      var libs, inv, viable, g, nd, nearWeakEn;
       for (i = 0; i < legal.length; i++) {
         mv = legal[i];
         if (mv < 0) continue;
@@ -358,23 +543,85 @@
         }
         eye = ownEyeAt(srcBoard, mv, turn);
         owner = terrOwner[mv];
-        useful = rootCap[mv] > 0;
-        if (!useful && rootPat[mv] >= 40) useful = true;                     // connection / cut
-        if (!useful) {
-          var openPhase = emptyRoot > Math.max(4, (n * 0.35) | 0);
-          var safe = rootLibs[mv] >= 2;
-          var bigRegion = terrSize[mv] > TERR_SMALL;
-          if (openPhase && safe) useful = true;                              // open board: claim space safely
-          else if (safe && terrColorCount[mv] >= 2) useful = true;           // real dame, +1
-          else if (safe && bigRegion) useful = true;                         // large open area: defend/invade, never pass
+        mvSave[mv] = countSavesAt(srcBoard, mv, turn);
+        mvStab[mv] = countStabAt(srcBoard, mv, turn) > 0 ? 1 : 0;
+        libs = rootLibs[mv];
+        if (!GAIN_POLICY) {
+          // ---- v2.0.0 legacy classification (A/B reference) ----
+          useful = rootCap[mv] > 0;
+          if (!useful && rootPat[mv] >= 40) useful = true;                     // connection / cut
+          if (!useful) {
+            var openPhase = emptyRoot > Math.max(4, (n * 0.35) | 0);
+            var safe = libs >= 2;
+            var bigRegion = terrSize[mv] > TERR_SMALL;
+            if (openPhase && safe) useful = true;                              // open board: claim space safely
+            else if (safe && terrColorCount[mv] >= 2) useful = true;           // real dame, +1
+            else if (safe && bigRegion) useful = true;                         // large open area: defend/invade, never pass
+          }
+          if (owner === turn && terrSize[mv] <= TERR_SMALL && rootCap[mv] === 0) useful = false; // own SMALL settled territory
+          if (eye && rootCap[mv] === 0) useful = false;                        // own eye
+          if (libs === 1 && rootCap[mv] === 0) useful = false;                 // self-atari
+          mvUseful[mv] = useful ? 1 : 0;
+          if (useful) noUsefulRoot = false;
+          continue;
         }
-        if (owner === turn && !bigRegion && rootCap[mv] === 0) useful = false; // own SMALL settled territory
-        if (eye && rootCap[mv] === 0) useful = false;                        // own eye
-        if (rootLibs[mv] === 1 && rootCap[mv] === 0) useful = false;         // self-atari
-        rootUseful[mv] = useful ? 1 : 0;
+        // ---- v2.1 gain policy ----
+        // is the move inside a region bordered by exactly one enemy colour
+        // (their solid territory)?  Only those are "dead invasion" risks;
+        // a contested (2+-colour) region is normal play/dame for anyone.
+        inv = terrColorCount[mv] === 1 && !(terrColMask[mv] & (1 << turn));
+        // does it touch an enemy group with <= 3 liberties? (kill / capture race / ko threat material)
+        nearWeakEn = 0;
+        for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
+          var s = nbFlat[j];
+          if (srcBoard[s] !== 0 && srcBoard[s] !== turn && atkLibs[s] <= 3) { nearWeakEn = 1; break; }
+        }
+        viable = 0;
+        if (!inv || rootCap[mv] > 0 || nearWeakEn) viable = 1;
+        else if (terrSize[mv] >= V_DEEP && libs >= 3) viable = 1;              // huge region: real deep invasion
+        else if (terrSize[mv] >= V_MIN && libs >= 3) {
+          nd = nearestOwnWithin(srcBoard, mv, turn, 3);
+          if (nd <= 3) viable = 1;                                             // supported reduction/invasion
+          else if (libs >= 4 && nearestOwnWithin(srcBoard, mv, turn, 4) <= 4) viable = 1;
+        }
+        if (terrSize[mv] < V_MIN && !nearWeakEn) viable = 0;                   // no two eyes possible: dead stone
+        mvViable[mv] = viable;
+        g = staticGainFor(mv, turn, pcCur);
+        if (inv && !viable) g = 0;                                             // 100%-dead invasion: exactly worthless
+        ownGain[mv] = g;
+        useful = g > 0 || (rootCap[mv] > 0 && viable) || (mvSave[mv] > 0 && libs >= 2) || (mvStab[mv] && libs >= 2 && nearWeakEn);
+        if (eye && rootCap[mv] === 0) useful = false;                          // never fill our own eye
+        if (libs === 1 && rootCap[mv] === 0) useful = false;                   // self-atari
+        if (terrColorCount[mv] === 1 && (terrColMask[mv] & (1 << turn)) && g <= 0 && rootCap[mv] === 0 && mvSave[mv] === 0 && !mvStab[mv]) useful = false; // own settled territory, any size
+        mvUseful[mv] = useful ? 1 : 0;
+        atkB[mv] = ATK_ORDER ? atkBonusAt(mv, turn) : 0;
         if (useful) noUsefulRoot = false;
       }
+      if (GAIN_POLICY) computeEnemyThreat(turn, pcCur, ownWeak);
       return noUsefulRoot;
+    }
+
+    // Can any active opponent still change the score? (blocks the pass gate)
+    // (a) dame / mixed regions exist, (b) one of our single-colour regions is
+    // invadable at a supported (or deep-huge) point, (c) we have a capturable
+    // weak group. When none of these hold, the position is frozen for everyone.
+    function computeEnemyThreat(turn, pc, ownWeak) {
+      enemyThreat = ownWeak || dameExists;
+      if (enemyThreat) return;
+      var e, i, j, je, libs;
+      for (e = 1; e <= pc && !enemyThreat; e++) {
+        if (e === turn || outFlags[e]) continue;
+        fillColorNear(srcBoard, e, 4);
+        for (i = 0; i < n; i++) {
+          if (srcBoard[i] !== 0) continue;
+          if (terrColorCount[i] !== 1 || !(terrColMask[i] & (1 << turn))) continue; // only our regions
+          if (terrSize[i] < V_MIN) continue;                                        // too small to live in
+          libs = 0;
+          for (j = nbOff[i], je = nbOff[i + 1]; j < je; j++) if (srcBoard[nbFlat[j]] === 0) libs++;
+          if (libs < 3) continue;
+          if (enemyNear[i] <= 3 || (terrSize[i] >= V_DEEP && libs >= 4)) { enemyThreat = true; break; }
+        }
+      }
     }
 
 
@@ -594,8 +841,14 @@
       var list = [], i;
       for (i = 0; i < n; i++) {
         if (srcBoard[i] !== 0) continue;
-        if (simExactLegal(i, turn)) { list.push(i); rootCap[i] = lastCapEnd - lastCapStart; rootLibs[i] = lastRootLibs; }
-        else { rootCap[i] = 0; rootLibs[i] = 0; }
+        if (simExactLegal(i, turn)) {
+          list.push(i);
+          rootCap[i] = lastCapEnd - lastCapStart;
+          // v2.1: exact liberty count of the resulting group (the applyMove scan
+          // early-exits at 2, which clamps every viability test to "2").
+          scanGroup(simBoard, i, turn, undefined);
+          rootLibs[i] = lastLibs;
+        } else { rootCap[i] = 0; rootLibs[i] = 0; }
       }
       capCount = 0;
       list.push(-1); // pass is always legal
@@ -615,21 +868,47 @@
       return cnt;
     }
 
+    // own groups adjacent to `move` that are down to <= 2 liberties: the move
+    // connects to / defends them.  Keeps needed defensive moves search-eligible
+    // even when their static score gain is 0.
+    function countStabAt(board, move, p) {
+      var sid = ++saveId, cnt = 0;
+      for (var j = nbOff[move], je = nbOff[move + 1]; j < je; j++) {
+        var s = nbFlat[j];
+        if (board[s] !== p || saveStamp[s] === sid) continue;
+        scanGroup(board, s, p, 3);
+        var gi = grpN;
+        for (var k = 0; k < gi; k++) saveStamp[grpBuf[k]] = sid;
+        if (lastLibs <= 2) cnt++;
+      }
+      return cnt;
+    }
+
     // Ascending heuristic order; untried.pop() therefore tries the best move first.
     // v2: captures/saves + hex-shape patterns + opening framework priors +
     // endgame eye/own-territory penalties + diversity jitter.
-    function orderRootMoves(moves, turn, allowPass, passEnds, noUseful) {
+    // Ascending heuristic order; untried.pop() therefore tries the best move first.
+    // v2.1: gain policy orders by static score gain + attack bonus on weak enemy
+    // groups (+ multiplayer leader weighting); legacy keeps the v2.0.0 ordering.
+    function orderRootMoves(moves, turn, allowPass, passEnds, passGate) {
       var scored = [], mi, mv, sc, j, je, v, own, opp, save, eye, owner, dd;
       var opening = stoneCountRoot <= Math.max(6, (n * 0.22) | 0);
       var endgame = emptyRoot <= n * 0.55;
+      var inv;
       for (mi = 0; mi < moves.length; mi++) {
         mv = moves[mi];
         if (mv === -1) {
           if (!allowPass) continue;
-          sc = passEnds ? 1e7 : (noUseful ? 1e6 : -1e9);
+          sc = passEnds ? 1e7 : (passGate ? 1e6 : -1e9);
         } else {
-          save = countSavesAt(srcBoard, mv, turn);
-          sc = rootCap[mv] * 1000 + save * 140 + rootPat[mv];
+          save = mvSave[mv];
+          if (GAIN_POLICY) {
+            sc = ownGain[mv] * GAIN_W + rootCap[mv] * 40 + save * 140 + atkB[mv] + rootPat[mv];
+            inv = terrColorCount[mv] > 0 && !(terrColMask[mv] & (1 << turn));
+            if (inv && mvViable[mv]) sc += Math.min(terrSize[mv], 40) * 3;      // a living invasion dissolves their region
+          } else {
+            sc = rootCap[mv] * 1000 + save * 140 + rootPat[mv];
+          }
           own = 0; opp = 0;
           for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
             v = srcBoard[nbFlat[j]];
@@ -639,12 +918,13 @@
           eye = ownEyeAt(srcBoard, mv, turn);
           owner = terrOwner[mv];
           if (eye && rootCap[mv] === 0) sc -= 900;                               // never fill our own eye
-          if (owner === turn && terrSize[mv] <= TERR_SMALL && rootCap[mv] === 0 && save === 0) sc -= 700; // never fill own eyes/tiny territory
+          if (terrColorCount[mv] === 1 && (terrColMask[mv] & (1 << turn)) && rootCap[mv] === 0 && save === 0 && !mvStab[mv]) sc -= 700; // never fill own territory (any size)
           else if (owner === 0 && rootLibs[mv] >= 2) sc += 10;                   // safe neutral point (dame, +1)
           if (opening) {
             dd = nearestStoneDist(srcBoard, mv);
             sc += dd >= 3 ? 40 : dd === 2 ? 22 : dd === 1 ? 4 : 0;               // build a framework, not only adjacent
-            sc += (n - geomDistCenter[mv]) * 0.20;
+            sc += (n - geomDistCenter[mv]) * (pcCur >= 3 ? 0.12 : 0.20);         // many players: the centre is contested, edges pay
+            if (pcCur >= 3 && geomDistCenter[mv] >= (geo.size - 1) * 0.35) sc += 14; // space race: corner/edge frameworks
             if (nbMask[mv] !== FULL_MASK) sc -= 28;                              // edge penalty while opening
             sc += rng() * 60;                                                    // opening variety (seeded)
           } else if (endgame) {
@@ -682,6 +962,7 @@
     var anaMark = new Int32Array(n), anaId = 0;
     var pLastCap = 0, pLastKo = -1, pLastOwnLibs = 0;
     var tBestCap = -1, tBestCapSize = 0, tBestSave = -1, tBestSaveSize = 0;
+    var tBestAtk2 = -1, tBestAtk2Size = 0;
     var rng = mulberry32(1);
     var amafMark = new Int32Array(n), amafWho = new Int8Array(n), amafStamp = 0;
 
@@ -749,6 +1030,11 @@
         if (libs === 1 && lp === e) {
           if (c === p) { if (gi > tBestSaveSize) { tBestSave = e; tBestSaveSize = gi; } }
           else { if (gi > tBestCapSize) { tBestCap = e; tBestCapSize = gi; } }
+        } else if (PLAYOUT_ATK && c !== p && libs === 2 && gi > tBestAtk2Size) {
+          // e is one of this enemy group's two liberties: playing it puts the
+          // group in atari.  Playouts that never pressure 2-lib groups
+          // systematically undervalue attacks (defensive bias).
+          tBestAtk2 = e; tBestAtk2Size = gi;
         }
       }
     }
@@ -762,6 +1048,7 @@
     function analyzeTurn(p) {
       var tid = ++turnId;
       candCount = 0; tBestCap = -1; tBestCapSize = 0; tBestSave = -1; tBestSaveSize = 0;
+      tBestAtk2 = -1; tBestAtk2Size = 0;
       var ei, e, j, je, local;
       for (ei = 0; ei < empCount; ei++) {
         e = empList[ei];
@@ -810,7 +1097,7 @@
       var cs = pcapCount;
       if (!playApply(e, p)) { pcapCount = cs; return 0; }
       // Reject self-atari (own group left with a single liberty) unless it captured.
-      if (pLastCap === 0 && pLastOwnLibs === 1 && rng() < 0.95) { playUndo(e, cs); return 0; }
+      if (pLastCap === 0 && pLastOwnLibs === 1 && rng() < SELF_ATARI_REJECT) { playUndo(e, cs); return 0; }
       stoneCnt[p]++;
       for (var k = cs; k < pcapCount; k++) stoneCnt[pcapColor[k]]--;
       removeEmpty(e);
@@ -828,6 +1115,7 @@
       analyzeTurn(p);
       if (tBestCap >= 0 && rng() < 0.9) { if (tryAccept(p, tBestCap)) return 1; }
       if (tBestSave >= 0 && rng() < 0.85) { if (tryAccept(p, tBestSave)) return 1; }
+      if (tBestAtk2 >= 0 && rng() < 0.35) { if (tryAccept(p, tBestAtk2)) return 1; }
       if (candCount > 0) {
         var a, e;
         for (a = 0; a < 8; a++) {
@@ -954,6 +1242,31 @@
         }
         shuf(glob);
         for (i = 0; i < glob.length && i < 8; i++) arr.push(glob[i]);
+        // v2.1: liberties of weak enemy groups (<= 3 libs, < 2 eyes) as attack
+        // candidates.  Measured weaker at equal budget (see notes 11), so this
+        // is opt-in (opts.treeAtk); the root ordering/bias covers attacks.
+        if (ATK_ORDER && TREE_ATK) {
+          var atkPts = [], found;
+          dsSeenId++;
+          for (i = 0; i < n; i++) {
+            var ac = treeBoard[i];
+            if (ac === 0 || ac === mover || dsSeen[i] === dsSeenId) continue;
+            var alibs = scanGroupFull(treeBoard, i, ac);
+            var agi = grpN, agid = ++dsGroupId, k2;
+            for (k2 = 0; k2 < agi; k2++) { dsSeen[grpBuf[k2]] = dsSeenId; dsGMark[grpBuf[k2]] = agid; }
+            if (alibs > 3) continue;
+            if (groupEyeCount(treeBoard, ac, agid) >= 2) continue;
+            for (k2 = 0; k2 < alibs && atkPts.length < 10; k2++) {
+              var alp = dsLibs[k2];
+              if (treeBoard[alp] !== 0) continue;
+              found = 0;
+              for (var ai3 = 0; ai3 < arr.length; ai3++) { if (arr[ai3] === alp) { found = 1; break; } }
+              if (!found) atkPts.push(alp);
+            }
+          }
+          shuf(atkPts);
+          for (i = 0; i < atkPts.length; i++) arr.push(atkPts[i]);
+        }
       }
       // pass
       arr.push(-1);
@@ -964,7 +1277,7 @@
       return arr;
     }
 
-    function selectUCT(node) {
+    function selectUCT(node, isRoot) {
       var kids = node.children, ln = Math.log(node.n + 1);
       var best = kids[0], bestV = -1e18;
       for (var i = 0; i < kids.length; i++) {
@@ -979,6 +1292,14 @@
           q = (1 - beta) * q + beta * (ch.rw / rn);
         }
         var v = q + curC * Math.sqrt(ln / ch.n);
+        // Progressive bias: a certain-kill root move (enclosed enemy group)
+        // gets early exploration priority so an N-stone capture is never
+        // drowned in playout noise on big open boards.  Decays to a floor - a
+        // verified capture is always worth taking unless the playout value
+        // refutes it clearly.
+        if (isRoot && ch.move >= 0 && atkB[ch.move] > 2000) {
+          v += Math.max(0.35, 1.2 - 0.025 * ch.n);
+        }
         if (v > bestV) { bestV = v; best = ch; }
       }
       return best;
@@ -1082,13 +1403,44 @@
       var noUseful = classifyRootMoves(legal, turn);
       var passEnds = passes + 1 >= activeCount;
 
-      // First-class pass: offered when it can end the game, after an opponent
-      // pass, when the position is settled (nothing useful), or in the endgame.
-      var allowPass = passEnds || passes > 0 || noUseful || emptyRoot <= Math.floor(n * 0.5) || legal.length <= 1;
+      // First-class pass (v2.1 gain policy): the engine passes exactly when
+      // nobody's score can move any more - no own gain AND no opponent threat
+      // (dame left / our regions invadable / our groups weak).  It never passes
+      // while dame or profitable plays remain, and never fills instead.
+      var passGate = GAIN_POLICY ? (noUsefulRoot && !enemyThreat) : noUsefulRoot;
+      var allowPass = passEnds || passGate || legal.length <= 1;
 
-      // Nothing on the board gains anything (own eyes / own settled territory /
-      // self-atari only): passing is the correct decision, do not fill.
-      if (noUseful) {
+      // Root search candidates: only moves that change the score or stabilize.
+      // (Legacy policy searches every legal move; A/B reference.)
+      var candMoves = legal;
+      if (GAIN_POLICY && RESTRICT_CAND) {
+        candMoves = [];
+        for (i = 0; i < legal.length; i++) {
+          if (legal[i] >= 0 && mvUseful[legal[i]]) candMoves.push(legal[i]);
+        }
+        if (candMoves.length === 0) {
+          // No useful move but opponents can still gain: defend.  Anything that
+          // is not an eye fill / self-atari / doomed invasion is considered.
+          for (i = 0; i < legal.length; i++) {
+            var fm = legal[i];
+            if (fm < 0) continue;
+            if (ownEyeAt(srcBoard, fm, turn) && rootCap[fm] === 0) continue;
+            if (rootLibs[fm] === 1 && rootCap[fm] === 0) continue;
+            if (terrColorCount[fm] > 0 && !(terrColMask[fm] & (1 << turn)) && !mvViable[fm]) continue;
+            candMoves.push(fm);
+          }
+        }
+      }
+      var candMark = legalMark;   // reuse: 1 = searchable root placement
+      if (GAIN_POLICY) {
+        if (RESTRICT_CAND) candMark = new Uint8Array(n);
+        for (i = 0; i < candMoves.length; i++) if (candMoves[i] >= 0) candMark[candMoves[i]] = 1;
+        if (allowPass && candMoves[candMoves.length - 1] !== -1) candMoves.push(-1);
+      }
+
+      // The position is frozen for everyone: passing is the correct decision
+      // (instant, zero playouts - this is where the endgame time budget goes).
+      if (passGate) {
         simBoard.set(srcBoard);
         capCount = 0;
         removeDeadStones(simBoard);
@@ -1150,6 +1502,17 @@
         root.passes = passes;
         root.boardCopy = new Int8Array(n); root.boardCopy.set(srcBoard);
         root.pc = pc; root.outSig = outSig;
+        // v2.1: drop children that are no longer search candidates at this
+        // position (own-territory fills, dead invasions) before recomputing.
+        if (GAIN_POLICY && root.children && root.children.length) {
+          var keptKids = [];
+          for (var pk = 0; pk < root.children.length; pk++) {
+            var kc = root.children[pk];
+            if (kc.move >= 0 && !candMark[kc.move]) continue;
+            keptKids.push(kc);
+          }
+          root.children = keptKids;
+        }
         // The adopted node's own w/n were accumulated for its OLD parent's
         // perspective; recompute root stats from its children, whose stats are
         // already from the new root mover's perspective and stay valid.
@@ -1161,11 +1524,11 @@
             root.v += root.children[rc].v;
           }
         }
-        // Rebuild the untried list: legal moves not already expanded.
+        // Rebuild the untried list: candidate moves not already expanded.
         var childMark = new Uint8Array(n);
         var kidsNow = root.children || [];
         for (i = 0; i < kidsNow.length; i++) if (kidsNow[i].move >= 0) childMark[kidsNow[i].move] = 1;
-        var ordered = orderRootMoves(legal, turn, allowPass, passEnds, noUseful);
+        var ordered = orderRootMoves(candMoves, turn, allowPass, passEnds, passGate);
         var untried = [];
         for (i = 0; i < ordered.length; i++) { if (ordered[i] === -1 || !childMark[ordered[i]]) untried.push(ordered[i]); }
         root.untried = untried;
@@ -1174,7 +1537,7 @@
         root = makeNode(turn, -1, null, 0, passes, -1);
         root.boardCopy = new Int8Array(n); root.boardCopy.set(srcBoard);
         root.pc = pc; root.outSig = outSig;
-        root.untried = orderRootMoves(legal, turn, allowPass, passEnds, noUseful);
+        root.untried = orderRootMoves(candMoves, turn, allowPass, passEnds, passGate);
         root.children = [];
       }
       var rootDepth = root.depth;
@@ -1197,7 +1560,7 @@
         while (true) {
           if (node.terminal) { leaf = node; break; }
           if (node.untried === null) {
-            node.untried = node.depth === rootDepth ? orderRootMoves(legal, turn, allowPass, passEnds, noUseful) : buildUntried(node.mover, node.depth - rootDepth);
+            node.untried = node.depth === rootDepth ? orderRootMoves(candMoves, turn, allowPass, passEnds, passGate) : buildUntried(node.mover, node.depth - rootDepth);
           }
           if (node.untried.length > 0) {
             var expanded = false;
@@ -1237,7 +1600,7 @@
           }
           // -------- all moves tried: UCT selection --------
           if (node.children && node.children.length > 0) {
-            var sel = selectUCT(node);
+            var sel = selectUCT(node, node === root);
             if (sel.move === -1) {
               histMove[histLen] = -1; histCapStart[histLen] = capCount; histCapEnd[histLen] = capCount; histLen++;
               node = sel;
@@ -1325,14 +1688,14 @@
       var move = -1;
       if (best) move = best.move;
       else {
-        // Fallback: best-ordered legal move (center preference when board is empty).
-        for (i = legal.length - 1; i >= 0; i--) { if (legal[i] === -1) continue; move = legal[i]; break; }
-        if (emptyRoot > 0 && legalMark[geo.center]) move = geo.center;
+        // Fallback: best-ordered candidate (center preference when board is empty).
+        for (i = candMoves.length - 1; i >= 0; i--) { if (candMoves[i] === -1) continue; move = candMoves[i]; break; }
+        if (move < 0 && emptyRoot > 0 && legalMark[geo.center]) move = geo.center;
       }
       // First-class pass decision: only pass when justified (otherwise use the
       // best placement even if the noisy search ranked pass highest).
       if (move === -1) {
-        var passJustified = passEnds || passes > 0 || noUseful;
+        var passJustified = passEnds || passGate;
         if (!passJustified) {
           var bestNon = null;
           if (root.children) {
@@ -1348,15 +1711,26 @@
           }
         }
       }
-      // Never fill our own eye / own settled territory while a better move exists.
-      if (move >= 0 && rootCap[move] === 0) {
-        var badSelf = ownEyeAt(srcBoard, move, turn) || (terrOwner[move] === turn && terrSize[move] <= TERR_SMALL);
-        if (badSelf && root.children) {
+      // Never fill our own eye / own settled territory (any size) and never
+      // return a 100%-dead invasion while a better search candidate exists.
+      // Under the gain policy these are already excluded from the candidates;
+      // with full search freedom (default) this guard is the guarantee.
+      if (move >= 0 && rootCap[move] === 0 && !mvStab[move] && mvSave[move] === 0) {
+        var badSelf = ownEyeAt(srcBoard, move, turn) ||
+          (terrColorCount[move] === 1 && (terrColMask[move] & (1 << turn)));
+        var badInv = GAIN_POLICY && terrColorCount[move] === 1 &&
+          !(terrColMask[move] & (1 << turn)) && !mvViable[move];
+        if ((badSelf || badInv) && root.children) {
           var bestGood = null;
           for (i = 0; i < root.children.length; i++) {
             var cg = root.children[i];
             if (cg.move < 0 || cg.n <= 0) continue;
-            if (rootCap[cg.move] === 0 && (ownEyeAt(srcBoard, cg.move, turn) || (terrOwner[cg.move] === turn && terrSize[cg.move] <= TERR_SMALL))) continue;
+            if (rootCap[cg.move] === 0 && !mvStab[cg.move] && mvSave[cg.move] === 0) {
+              if (ownEyeAt(srcBoard, cg.move, turn) ||
+                  (terrColorCount[cg.move] === 1 && (terrColMask[cg.move] & (1 << turn)))) continue;
+              if (GAIN_POLICY && terrColorCount[cg.move] === 1 &&
+                !(terrColMask[cg.move] & (1 << turn)) && !mvViable[cg.move]) continue;
+            }
             if (bestGood === null || cg.n > bestGood.n) bestGood = cg;
           }
           if (bestGood !== null) move = bestGood.move;
@@ -1365,9 +1739,10 @@
       // Safety: never return an illegal placement.
       if (move >= 0 && !legalMark[move]) move = -1;
 
-      // Resignation: 2 players only, genuinely hopeless, opt-in.
+      // Resignation: 2 players only, genuinely hopeless, opt-in.  Applies to a
+      // chosen pass as well (a frozen hopeless position: resign, do not drag it).
       var resignThreshold = options.resignThreshold;
-      if (move >= 0 && resignThreshold != null && pc === 2 && root.n >= 128 && emptyRoot < n * 0.6) {
+      if (move >= -1 && resignThreshold != null && pc === 2 && root.n >= 128 && emptyRoot < n * 0.6) {
         var wr = root.n > 0 ? root.w / root.n : 1;
         var vl = root.n > 0 ? root.v / root.n : 0;
         if (wr < +resignThreshold && vl < -0.35) move = -2;

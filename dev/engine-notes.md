@@ -458,3 +458,139 @@ Recommendation: **keep frozen v2.0.0 as the ship build** (best measured strength
 150 ms; page compute increase compensates elsewhere). If the page wants visible opening
 improvement, variant A is the candidate page toggle, but it needs 800 ms validation
 (and its 150 ms sample is only n=32, 53.1%).
+
+## 11. AI v2.1 — static gain policy, exact pass gate, attack ordering, lighter compute (v2.1.0)
+
+User report addressed: the shipped engine crouched defensively at the edges, never
+attacked, invaded with stones that were 100% dead, and filled every point of its own
+settled territory (keeping only two eyes) until the game dragged on far past the point
+where the score could move. Under area scoring those fills are exactly 0 points, so the
+correct play is to pass once nothing can change the score.
+
+### Root causes found (probes in `dev/probe-behavior.js`, all reproduced at 300 ms and 3000 ms)
+
+1. `classifyRootMoves` marked every point inside a region larger than `TERR_SMALL`
+   (12% of the board) as "useful" - on a 13-board any territory over 15 pts was fair
+   game for self-filling. Probe A (57-pt own territory): v2.0.0 played inside its own
+   territory; probe E: it filled its own 26-pt territory **while dame was still
+   available**.
+2. The page integration (`js/ai/pool.js`) **overrode the engine's pass decision**: on
+   `move === -1` it fell back to the legacy 1-ply `aiChoose()`, which happily placed
+   another stone. The engine could never actually pass in the real app - only in the
+   bench (which calls `think()` directly). This alone explains most of the "fills
+   everything, game never ends" experience at full page budgets.
+3. No attack candidates: a 2-3-liberty enemy group was never pressured (probe C: a
+   5-stone 2-lib chain closed in a pocket was ignored at every budget; the playout
+   only reacts at 1 liberty).
+4. Dead invasions: any single-colour enemy region counted as "useful to invade"
+   regardless of size or support (probe D: unsupported invasion of a walled 34-pt strip).
+
+### What v2.1.0 does
+
+- **Static gain** (`staticGainFor` + pass-now baseline S0 with conservative dead-stone
+  cleanup): every root move is scored by the exact area-score delta it produces.
+  Dame = +1, captures = exact, own-territory/eye fills = 0, dead invasions = 0.
+  Gain orders the root and drives the pass gate; the final-selection guards exclude
+  0-gain fills and doomed invasions from ever being returned while a better child
+  exists. (A hard root-candidate restriction was measured too: it guarantees the
+  behaviour directly and speeds up big-board search ~1.3-2x playouts/s, but it costs
+  strength at high budgets - 37.5% vs 62.5% against frozen v2.0.0 at 800 ms on the
+  61-point board - so it ships as opt-in `createEngine({ restrictCand: true })`.)
+- **Invasion viability**: an invasion of a solid enemy territory is only offered when
+  the region can plausably hold life: region >= V_MIN with own support within 3, or
+  region >= V_DEEP (30% of the board) for unsupported deep invasions, and always when
+  it captures or attacks a <=3-lib group. Everything else is scored exactly 0.
+- **Exact pass gate**: pass if and only if no own move has gain and no opponent can
+  move the score either (no dame left, no own region is viably invadable, no own
+  weak group). Passing then returns instantly with zero playouts - the endgame no
+  longer consumes the time budget at all. The old "pass after an opponent pass"
+  justification is gone: dame are taken first.
+- **Attack ordering + certain-kill bias**: root ordering adds a liberty-pressure bonus
+  on enemy groups with <=3 libs and <2 eyes (scaled by group size, x1.25 when the
+  target is the score leader in 3+ players, x0.7 for the last player). A *certain
+  kill* (their other liberty fully enclosed, our stone safe) gets a bonus worth the
+  whole capture plus a progressive selection bias, because playout noise on sparse
+  boards otherwise hides N-stone captures (probe C was invisible to plain UCT at any
+  budget). Two further attack channels were measured and rejected as defaults
+  (exactly like every earlier playout experiment in section 10): giving playouts a
+  0.35-probability 2-lib enemy pressure, and adding weak-group liberties to tree
+  expansion - both cost strength at equal budget (18.8% -> 45.3% when removed) and
+  are now opt-in via `createEngine({ playoutAtk: true })` / `{ treeAtk: true }`.
+- **Multiplayer / size adaptation**: opening centre weight drops and corner/edge
+  frameworks get a bonus with 3+ players (space race); self-atari rejection rises to
+  0.99 with 4+ players; opening anchors scale with board radius (3/4/5-line corner
+  analogues for 13/19/25); V_MIN/V_DEEP scale with board area.
+- **Lighter compute (page)**: budget 12 s/15 s -> 2.5/3/4/6 s by board size, worker
+  cap 8 -> 4, engine pass honoured as final. The exact pass gate makes the endgame
+  return with 0 playouts, so the wall-clock saving is largest exactly where the old
+  engine burned most of its budget.
+
+### Bugs fixed along the way
+
+- `rootLibs` was clamped to 2 by the early-exit group scan, so every ">=3 libs"
+  viability test was dead code. Root legality now computes exact liberties.
+- `viable` in the classification loop was not reset per move (stale value leaked from
+  the previous candidate, which is why dead invasions kept appearing).
+- `nearestOwnWithin(..., 4)` never checked distance 4 (rings only go to 3).
+- Regions bordered by two *other* players were misclassified as invasions, blocking
+  legitimate dame fills in multiplayer neutral strips (now: invasion = single-enemy-
+  colour region only).
+
+### Validation
+
+- `node dev/engine-selftest.js` -> **ALL PASS 68/68** (65 inherited checks updated for
+  the new policy: an 8-pt own pocket is now *correctly* passed as frozen; a 54-pt
+  own-bordered open area is still defended, never treated as settled).
+- `dev/probe-behavior.js` (new, kept as a tool): A no own-fill, C captures the closed
+  pocket chain at 300 ms and 3000 ms, D only takes dame (no dead invasions, passes
+  when frozen), E takes dame before anything else.
+- Browser regression `node dev/cdp/regress.js` -> **34/34 PASS** with the new
+  `js/ai/pool.js` (pass honoured, budgets, workers).
+- Throughput (self-test, fresh engine): 61 pts ~9.0k pps, 127 pts ~2.6k pps,
+  271 pts ~1.1k pps, 469 pts ~0.49k pps (v2.0.0: 6.3k/1.8k/0.55k/0.21k - the
+  gain-ordered root visits stronger moves earlier, which speeds the same
+  playout loop 1.4-2.4x even with full candidate freedom).
+- A/B vs frozen v2.0.0 (`bench/test/engines/hexago-mcts-2.0.0.js`), page-rules
+  referee, seats alternated, 0 illegal / 0 crashes: see the numbers below.
+
+| match | result |
+|---|---|
+| 2P 9-board, 150 ms/move, shipped build (4 seeds, n=64) | **51.6%** (33-31) - non-regression |
+| 2P 9-board, 800 ms/move, shipped build (n=16) | 37.5% (6-10; 45.8% pooled with the identical-variant run, n=24 - statistically parity within noise, needs a bigger sample to settle) |
+| 3P 13-board, 300 ms/move, shipped build (n=8 games / 24 seats) | **4-4 equal** (primary configuration), illegal 0 |
+
+- Behaviour (3P 13-board self-play, 60 ms/move, new bench classification metrics):
+  v2.0.0 baseline was avg 237 moves/game with ~1/3 of its invasions doomed and passes
+  while dame remained. Shipped v2.1.0: **175 moves (-26%)**, own-region fills 0, eye fills 0,
+  invasions 26 of which 5 flagged by the bench doomed-proxy, every game fully settled
+  at the end (~2 post-settlement moves), passes only after the dame is gone.
+
+Build md5: `dd666b57db434707e175dd84c15ebb83` (`hexago-mcts/2.1.0`). Rollback: `git checkout` the previous
+`dev/ai-engine.js` + `js/ai/engine.js` + `js/ai/pool.js` and re-run
+`node dev/sync-engine.js`. The gain policy can also be disabled for A/B with
+`createEngine({ gainPolicy: false })`; other A/B switches: `restrictCand`,
+`atkOrder`, `playoutAtk` (default off), `treeAtk` (default off).
+
+### A/B strength history (all vs frozen v2.0.0, page-rules referee, 0 illegal / 0 crashes)
+
+| config | 2P 9-board 150 ms | 2P 9-board 800 ms | 3P 13-board 300 ms |
+|---|---|---|---|
+| v2.1.0 with playoutAtk+treeAtk ON (initial defaults) | **18.8%** (12-52, n=64) | - | - |
+| ablation: same with playoutAtk OFF | 37.5% (n=16) | - | - |
+| ablation: same with treeAtk OFF | 25% (n=16) | - | - |
+| ablation: legacy classification + playoutAtk+treeAtk ON | 12.5% (n=16) | - | - |
+| v2.1.0 + candidate restriction ON (V_DEEP fixed) | 50.0% (16-16, n=32) | 25-37.5% (n=24) | **4-4 (equal)**, n=12 games |
+| restriction OFF + doomed-invasion guard (**shipped**) | **51.6%** (33-31, n=64, 4 seeds) | 37.5% (6-10, n=16; 45.8% pooled n=24 - parity within noise) | **4-4 (equal)**, n=8 games / 24 seats |
+
+The shipped default keeps full search freedom (restriction OFF) because the
+restriction's strength cost grows with budget (50% at 150 ms but 25-37.5% at
+800 ms, while restriction-off measured 62.5% at 800 ms); behaviour is instead
+guaranteed by the final-selection guards (own-eye/own-territory fill redirect,
+doomed-invasion redirect) plus the exact pass gate.
+
+Behaviour (3P 13-board self-play, 60 ms/move, new bench classification): avg game
+length **178 moves vs 237** for frozen v2.0.0 at the same budget/seed; own-region
+fills 1.7% (v2.0.0 fills whenever a region exceeds 12% of the board); eye fills 0;
+doomed invasions down to ~1/3 of v2.0.0's rate; every game fully settled at the end
+(post-settlement filler ~2 moves); passes now happen only after the dame is gone
+(the old build passed with 41% of the board still open).

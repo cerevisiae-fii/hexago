@@ -19,13 +19,18 @@ const AI_WORKER_URL = (function () {
 
 function aiBudgetMs() {
   if (aiTestBudgetMs != null) return aiTestBudgetMs;
-  // 最強固定。大盤は1手の影響が大きいので少し長く考える（上限あり）。
-  return P.length >= 250 ? 15000 : 12000;
+  // 最強固定だが軽量に。終盤は利得ベースで即断（think が0プレイアウトで返る）ため、
+  // この予算が実際に消費されるのは中盤だけ。大盤ほど1手の影響が大きいので時間を増やす。
+  const pts = P.length;
+  if (pts >= 450) return 6000;   // 25路
+  if (pts >= 250) return 4000;   // 19路
+  if (pts >= 120) return 3000;   // 13路
+  return 2500;                   // 9路
 }
 function aiPoolWant() {
   const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-  // メインスレッドを空けるため cores-1 を上限に。低メモリ端末では控えめに。
-  let want = Math.min(8, Math.max(1, cores));
+  // メインスレッドを空けるため cores-1 を上限に、かつ4並列で十分（root並列マージ）。
+  let want = Math.min(4, Math.max(1, cores - 1));
   const mem = (typeof navigator !== 'undefined' && navigator.deviceMemory) || 8;
   if (mem <= 4) want = Math.min(want, 2);
   return Math.max(1, want);
@@ -207,6 +212,9 @@ function maybeAI() {
     lastAIStats = result || null;
     let move = result && Number.isInteger(result.move) ? result.move : -3;
     if (move === -2) { resign(); after(); return; }
+    // エンジンのパス判定(-1)は最終決定として尊重する（旧統合ではレガシーAIの
+    // 着手で上書きされ、終盤に際限なく石を置き続ける原因だった）。
+    if (move === -1) { doPass(); after(); return; }
     if (move < 0 || !play(move)) {
       const fb = aiFallbackMove();
       if (fb === -2) resign(); else if (fb < 0 || !play(fb)) doPass();

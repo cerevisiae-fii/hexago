@@ -578,16 +578,28 @@ section('5b. v2 opening variety / framework / pass & eye endgame');
   check('own territory + real dame: plays the dame, never fills own territory/eye',
     rDame.move === dame, 'move=' + rDame.move + ' dame=' + dame + ' terr=' + terrA + ',' + terrB);
 
-  // a large own-bordered open area must NOT be treated as settled territory:
-  // the engine has to keep playing (defending/invading) instead of passing.
-  const bBig = new Array(n).fill(1);
-  const bigReg = [c];
-  for (const x of g.NB[c]) bigReg.push(x);
-  outer: for (const x of g.NB[c]) for (const y of g.NB[x]) { if (bigReg.indexOf(y) < 0) { bigReg.push(y); break outer; } }
-  for (const x of bigReg) bBig[x] = 0;
+  // v2.1 gain policy: a SMALL own-bordered pocket (8 pts, no enemy stones) is
+  // frozen for everyone - any invasion there is a dead stone, so passing is
+  // correct (v2.0.0 filled this instead).
+  const bPocket = new Array(n).fill(1);
+  const pocketReg = [c];
+  for (const x of g.NB[c]) pocketReg.push(x);
+  outer: for (const x of g.NB[c]) for (const y of g.NB[x]) { if (pocketReg.indexOf(y) < 0) { pocketReg.push(y); break outer; } }
+  for (const x of pocketReg) bPocket[x] = 0;
+  const rPocket = eng.think(mk(bPocket, 1, 0), { maxPlayouts: 400, seed: 17 });
+  check('small own-bordered pocket (8 pts) is frozen: pass, never fill',
+    rPocket.move === -1, 'move=' + rPocket.move + ' region=' + pocketReg.length);
+
+  // but a genuinely LARGE own-bordered open area (54 pts, no enemy stones yet)
+  // is NOT settled: an enemy invasion could live there, so the engine must
+  // keep playing (reinforce/defend) instead of passing.
+  const bBig = new Array(n).fill(0);
+  bBig[c] = 1;
+  for (const x of g.NB[c]) bBig[x] = 1;
   const rBig = eng.think(mk(bBig, 1, 0), { maxPlayouts: 400, seed: 17 });
-  check('large own-bordered open area is not treated as settled (keeps playing, does not pass)',
-    rBig.move >= 0 && bBig[rBig.move] === 0, 'move=' + rBig.move + ' region=' + bigReg.length);
+  const bigEmpty = bBig.reduce((a, v) => a + (v === 0 ? 1 : 0), 0);
+  check('large own-bordered open area is not settled: keeps playing, does not pass',
+    rBig.move >= 0 && bBig[rBig.move] === 0, 'move=' + rBig.move + ' region=' + bigEmpty);
 
   // opponent settled territory only: the two remaining points are surrounded by
   // opponent stones and are suicide for us -> pass

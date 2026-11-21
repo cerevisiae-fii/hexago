@@ -16,6 +16,8 @@ Layout:
 bench/bench.js             CLI, match runner, aggregation, probe mode
 bench/lib/rules.js         independent game rules (geometry, sim, pass, score, resign)
 bench/lib/old-ai.js        index.html AI extraction + vm sandbox + cross-check
+bench/lib/style.js         --style tracker: phases, adjacency, fills, classification, settledness
+bench/lib/metrics.js       per-move classification helpers (regions, attack/defense, settledness)
 bench/test/mock-engine.js  mock engine to self-test the bench wiring (NOT the real engine)
 bench/README.md            this file
 ```
@@ -43,6 +45,10 @@ node bench/bench.js --probe --size 9 --time 300
 
 # behaviour/style metrics: self-play an engine, 150 ms/move, 6 games
 node bench/bench.js --style --games 6 --size 9 --players 2 --time 150 --seed 1 --engine dev/ai-engine.js
+
+# style metrics on multi-player / bigger boards (also exercises the
+# per-engine move classification and settledness metrics; 3 players, 13 board)
+node bench/bench.js --style --games 2 --size 13 --players 3 --time 60 --seed 1
 
 # style A/B: v1.2.0 (frozen snapshot) vs the current engine on the same games
 node bench/bench.js --style --games 6 --size 9 --players 2 --time 150 --seed 1 \
@@ -280,6 +286,100 @@ Every report prints the engine sha256 prefix; use frozen snapshots in
 `bench/test/engines/` when comparing versions, because `dev/ai-engine.js` is
 under active development.
 
+### Move classification and settledness metrics (bench v1.1 additions)
+
+These make the remaining user complaints objectively measurable and
+comparable between engine builds. All classification is pure board analysis
+(`bench/lib/metrics.js`) computed on the position **before** each board move
+plus the move's `sim()` result; it never looks inside the engine. Passes and
+resignations are not classified. In 3-6 player games every metric accumulates
+per engine key exactly like the original ones: an agent's seats pool into its
+bucket ("enemy" below = any colour other than the mover's, including stones
+of resigned seats, which stay on the board).
+
+**Region classification** (exclusive; one class per board move). The played
+point's *region* is the maximal set of connected empty points containing it
+(page-`regionInfo` equivalent, ANY size -- no small-region cutoff):
+
+- `ownRegionFills` -- the region's border colours = {mover} only. Definition-
+  identical to the pre-existing `territoryFills` metric, but part of a
+  complete taxonomy now (the numbers coincide by construction).
+- `eyeFills` -- subset of own-region fills where **all** neighbours of the
+  played point are mover stones (page-`countEyes` point semantics, >= 3
+  neighbours). Coincides with the pre-existing `eyeFills` metric.
+- `dameFills` -- the region has no bordering stones at all, or its border
+  contains the mover's colour **plus** at least one other colour (contested
+  dame/neutral area).
+- `invasions` -- the region's border colours are all other players' (no
+  mover colour touches it). `doomedInvasions` is the subset with region size
+  <= 10 **and** no own stone within hex distance 3 of the played point at
+  placement time (the "stone is 100% dead" proxy; a mover with no stones at
+  all counts as unsupported). `supportedInvasions = invasions -
+  doomedInvasions` (larger and/or supported invasions).
+
+**Flag classification** (orthogonal to the region class; a move can be
+several at once):
+
+- `captureMoves` -- the move removed enemy stones (`sim.cap.length > 0`).
+  Distinct from `captures`, which still counts captured **stones**.
+- `tacticalSaves` -- some own group with exactly 1 liberty (atari) before the
+  move has >= 2 liberties after it. Own stones can never be removed by an
+  own placement, so this covers extensions, connections to a friendly group,
+  and captures of the adjacent enemy group that held the own group in atari.
+- `attackMoves` -- the move (i) captures an enemy group, or (ii) reduces an
+  enemy group's liberty count to 1 (atari; group had >= 2 liberties before),
+  or (iii) reduces by >= 1 the liberties of an enemy group that had <= 3
+  liberties and fewer than two eyes **before** the move (a squeeze on a
+  nearly-dead, eyeless group; two-eye groups are exempt). Only enemy groups
+  adjacent to the placed stone can lose a liberty, so only those are
+  examined. Breakdown: `attackByCapture` / `attackByAtari` /
+  `attackBySqueeze` (clauses can co-occur on one move).
+- `defenseMoves` -- `tacticalSaves` UNION moves whose stone neighbours are
+  all the mover's colour ("adjacent only to own stones"; at least one stone
+  neighbour required -- a move into empty space is not defense).
+  `adjacentOwnOnlyMoves` reports the second component, which may overlap
+  with saves.
+- `attackDefenseRatio` = attackMoves / defenseMoves (null when defenseMoves
+  = 0) -- the "it never attacks, it only defends" number; > 1 means the
+  engine attacks more than it defends.
+
+Every count also has a `*RatePct` field (share of that engine's board moves).
+
+**Settledness** ("meaningless moves lengthen the game"). Operational
+definition: the board is **fully settled** iff every empty region is
+bordered by exactly one colour (checked after every board move). Note the
+definition is deliberately simple: a board whose single empty region touches
+only one stone is "settled" too, so the state can flicker early; therefore:
+
+- `firstSettledMoveIdx` (per game) = the earliest board move after which the
+  board stayed fully settled **until the end** -- i.e. the first move of the
+  final settled suffix (game-move index incl. passes, directly comparable to
+  `firstPass.moveIdx`; null when the game never ended settled).
+- `firstSettledBoardMoveIdx` = the same move counted among board moves only.
+- `postSettlementMoves` = board moves from that move (the settling move
+  itself **included**) to the end of the game: every one of them was played
+  into/within a settled position, i.e. could only fill own territory or
+  dame.
+- `postSettlementOwnRegionFills` = how many of those were own-region fills
+  (the pure "fills its own settled territory" tail). Also attributed per
+  engine (`classification.postSettlementMoves` /
+  `classification.postSettlementOwnRegionFills`).
+
+Aggregates over games live in `style.settledness` (`gamesSettled`,
+`settledGameFracPct`, means/min/max over settled games only); the per-game
+values plus `moves`, `boardMoves`, `firstPass` are in every `gameLog` entry.
+
+JSON locations: `style.overall.classification` and
+`style.perEngine.A|B.classification` hold the counts/rates/ratio;
+`style.settledness` the aggregates; per-game `gameLog[...]` entries carry
+`ownRegionFills`, `dameFills`, `invasions`, `doomedInvasions`,
+`captureMoves`, `tacticalSaves`, `attackMoves`, `defenseMoves`,
+`firstSettledMoveIdx`, `firstSettledBoardMoveIdx`, `postSettlementMoves`,
+`postSettlementOwnRegionFills`. The old fields (`eyeFills`,
+`territoryFills`, `captures`, `passes`, ...) are unchanged. Cost: the
+classification is O(board points) per move (two region scans + local group
+liberty checks), negligible next to any engine budget.
+
 ### v1.2.0 baseline (frozen snapshot `hexago-mcts-1.2.0.js`, sha256 `e7572b94…`)
 
 Command:
@@ -435,3 +535,11 @@ Engine contract expected by this harness (see `dev/ENGINE_SPEC.md`):
   nearest-own distance is counted as "no own stones" rather than a distance.
 - For deterministic `--style` comparisons pass `--playouts`/`--playouts2`
   (engine `maxPlayouts` cap); wall-clock `--time` budgets vary between runs.
+- The new classification metrics are proxies, not judgements: a
+  `doomedInvasion` is a placement that *looks* dead (enemy-only region of
+  size <= 10, no own stone within hex distance 3) -- it does not prove the
+  stone dies, and a `defenseMove` (own-contact-only) is not necessarily bad
+  in the opening. Compare engines on the same games/seats instead of reading
+  absolute values as strength. `firstSettled` uses the deliberately simple
+  "every empty region has exactly one border colour" rule, so boards that
+  end with dame left over never settle (reported as gamesSettled < games).

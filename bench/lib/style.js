@@ -20,7 +20,17 @@
  *         endgame   = after the opening AND (empty points <= 25% of the board
  *                     OR at least one pass has happened);
  *         middlegame = everything else.
+ *
+ * Extended metrics (bench/lib/metrics.js): every board move is additionally
+ * classified by region kind (own-region fill / dame / invasion, eye fills as
+ * a subset of own), capture, tactical save, attack and defense, plus the
+ * doomed-invasion proxy, and the board's fully-settled state is tracked after
+ * every move to derive first-settled indices and post-settlement move counts
+ * per game. All counters accumulate per engine key (an agent's seats pool into
+ * its bucket) exactly like the original metrics.
  */
+
+const metrics = require('./metrics');
 
 function countEmpty(board) {
   let n = 0;
@@ -109,6 +119,23 @@ function newBucket() {
     territoryFills: 0,
     passes: 0,
     resignations: 0,
+    cls: {
+      ownRegionFills: 0,
+      eyeFills: 0,
+      dameFills: 0,
+      invasions: 0,
+      doomedInvasions: 0,
+      captureMoves: 0,
+      tacticalSaves: 0,
+      attackMoves: 0,
+      attackByCapture: 0,
+      attackByAtari: 0,
+      attackBySqueeze: 0,
+      defenseMoves: 0,
+      adjacentOwnOnlyMoves: 0,
+      postSettlementMoves: 0,
+      postSettlementOwnRegionFills: 0,
+    },
     phases: phases,
     opening: {
       moves: 0,
@@ -131,6 +158,25 @@ function bumpBucket(b, feat, stats) {
   if (feat.adjacentEnemy) b.adjacentEnemy++;
   if (feat.isEye) b.eyeFills++;
   if (feat.isTerritory) b.territoryFills++;
+  const cls = feat.cls;
+  if (cls) {
+    const c = b.cls;
+    if (cls.isOwnRegionFill) c.ownRegionFills++;
+    if (cls.isEyeFill) c.eyeFills++;
+    if (cls.isDame) c.dameFills++;
+    if (cls.isInvasion) c.invasions++;
+    if (cls.isDoomedInvasion) c.doomedInvasions++;
+    if (cls.isCapture) c.captureMoves++;
+    if (cls.isTacticalSave) c.tacticalSaves++;
+    if (cls.isAttack) {
+      c.attackMoves++;
+      if (cls.attackByCapture) c.attackByCapture++;
+      if (cls.attackByAtari) c.attackByAtari++;
+      if (cls.attackBySqueeze) c.attackBySqueeze++;
+    }
+    if (cls.isDefense) c.defenseMoves++;
+    if (cls.adjacentOwnOnly) c.adjacentOwnOnlyMoves++;
+  }
   const ph = b.phases[feat.phase];
   ph.moves++;
   if (feat.selfAdjacent) ph.selfAdjacent++;
@@ -187,6 +233,9 @@ function finalizeBucket(b, R) {
   }
   const radius = R.geo.side - 1;
   const histMax = Math.min(6, radius);
+  const c = b.cls;
+  const moves = b.moves;
+  const rate = function (num) { return moves ? Math.round((1000 * num) / moves) / 10 : null; };
   return {
     moves: b.moves,
     selfAdjacent: b.selfAdjacent,
@@ -199,6 +248,37 @@ function finalizeBucket(b, R) {
     territoryFillRatePct: b.moves ? Math.round((1000 * b.territoryFills) / b.moves) / 10 : null,
     passes: b.passes,
     resignations: b.resignations,
+    classification: {
+      // exclusive region classes of the played point (any region size)
+      ownRegionFills: c.ownRegionFills,
+      ownRegionFillRatePct: rate(c.ownRegionFills),
+      eyeFills: c.eyeFills,                       // subset of ownRegionFills
+      eyeFillRatePct: rate(c.eyeFills),
+      dameFills: c.dameFills,
+      dameFillRatePct: rate(c.dameFills),
+      invasions: c.invasions,
+      invasionRatePct: rate(c.invasions),
+      doomedInvasions: c.doomedInvasions,         // subset of invasions
+      doomedInvasionRatePct: rate(c.doomedInvasions),
+      supportedInvasions: c.invasions - c.doomedInvasions, // larger or supported
+      // orthogonal flags (a move can be several of these at once)
+      captureMoves: c.captureMoves,               // moves that captured (captures above = stones)
+      captureMoveRatePct: rate(c.captureMoves),
+      tacticalSaves: c.tacticalSaves,
+      tacticalSaveRatePct: rate(c.tacticalSaves),
+      attackMoves: c.attackMoves,
+      attackMoveRatePct: rate(c.attackMoves),
+      attackByCapture: c.attackByCapture,
+      attackByAtari: c.attackByAtari,
+      attackBySqueeze: c.attackBySqueeze,
+      defenseMoves: c.defenseMoves,               // tacticalSaves union adjacentOwnOnly
+      defenseMoveRatePct: rate(c.defenseMoves),
+      adjacentOwnOnlyMoves: c.adjacentOwnOnlyMoves, // component of defenseMoves
+      attackDefenseRatio: c.defenseMoves ? Math.round((100 * c.attackMoves) / c.defenseMoves) / 100 : null,
+      // board moves this engine played from its game's first-settled point on
+      postSettlementMoves: c.postSettlementMoves,
+      postSettlementOwnRegionFills: c.postSettlementOwnRegionFills,
+    },
     phases: phases,
     openingDistances: {
       moves: b.opening.moves,
@@ -275,31 +355,46 @@ function createStyleTracker(R, opts) {
       endReason: null,
       scores: null,
       winners: null,
+      // extended classification / settledness bookkeeping
+      ownRegionFills: 0,
+      dameFills: 0,
+      invasions: 0,
+      doomedInvasions: 0,
+      captureMoves: 0,
+      tacticalSaves: 0,
+      attackMoves: 0,
+      defenseMoves: 0,
+      settledSeq: [],       // fully-settled flag after each board move (index+1 = board move idx)
+      moveIdxSeq: [],        // game-move index (incl. passes) of each board move
+      mvFlagsByKey: {},      // engine key -> [{ b: boardMoveIdx, own: 0|1 }] for post-settlement attribution
+      firstSettledMoveIdx: null,
+      firstSettledBoardMoveIdx: null,
+      postSettlementMoves: 0,
+      postSettlementOwnRegionFills: 0,
     };
   }
 
-  function recordMove(state, move, key, stats) {
+  function recordMove(state, move, key, stats, sim) {
     const board = state.board;
     const mover = state.turn;
     const moveIdx = state.moves + 1;
     const phase = classifyPhase(R, state, moveIdx, openingMoves);
-    const nbs = R.geo.NB[move];
-    let selfAdjacent = false, adjacentEnemy = false;
-    for (let k = 0; k < nbs.length; k++) {
-      const v = board[nbs[k]];
-      if (v === mover) selfAdjacent = true;
-      else if (v) adjacentEnemy = true;
-    }
+    // The runner already simulated the move for its legality check; the
+    // defensive re-sim only happens if a caller forgets to pass `sim`.
+    const mv = sim || R.simMove(board, move, mover, state.seenSet);
+    if (!mv) return; // illegal moves are counted by the runner, not classified
+    const cls = metrics.analyzeMove(R, board, move, mover, mv);
     const ownDistance = nearestOwnDistance(R, board, move, mover);
     const feat = {
       phase: phase,
       moveIdx: moveIdx,
-      selfAdjacent: selfAdjacent,
-      adjacentEnemy: adjacentEnemy,
-      isEye: eyePointSet(R, board, mover).has(move),
-      isTerritory: ownSoleRegion(R, board, move, mover),
+      selfAdjacent: cls.adjacentOwn > 0,
+      adjacentEnemy: cls.adjacentEnemy > 0,
+      isEye: cls.isEyeFill,            // same definition as the original metric
+      isTerritory: cls.isOwnRegionFill, // same definition as the original metric
       ownDistance: ownDistance,
       centerDistance: R.geo.dist(move, R.geo.center),
+      cls: cls,
     };
     bumpBucket(overall, feat, stats);
     if (byEngine[key]) bumpBucket(byEngine[key], feat, stats);
@@ -310,7 +405,21 @@ function createStyleTracker(R, opts) {
     if (!(key in game.firstMoveByKey)) game.firstMoveByKey[key] = move;
     game.eyeFills += feat.isEye ? 1 : 0;
     game.territoryFills += feat.isTerritory ? 1 : 0;
-    game.selfAdjacent += selfAdjacent ? 1 : 0;
+    game.selfAdjacent += feat.selfAdjacent ? 1 : 0;
+    game.ownRegionFills += cls.isOwnRegionFill ? 1 : 0;
+    game.dameFills += cls.isDame ? 1 : 0;
+    if (cls.isInvasion) {
+      game.invasions++;
+      if (cls.isDoomedInvasion) game.doomedInvasions++;
+    }
+    if (cls.isCapture) game.captureMoves++;
+    if (cls.isTacticalSave) game.tacticalSaves++;
+    if (cls.isAttack) game.attackMoves++;
+    if (cls.isDefense) game.defenseMoves++;
+    game.settledSeq.push(cls.settledAfter);
+    game.moveIdxSeq.push(moveIdx);
+    const flags = game.mvFlagsByKey[key] || (game.mvFlagsByKey[key] = []);
+    flags.push({ b: game.boardMovesTotal, own: cls.isOwnRegionFill ? 1 : 0 });
 
     if (moveIdx <= openingMoves) {
       const slot = distByMoveIdx[moveIdx] || (distByMoveIdx[moveIdx] = { n: 0, ownSum: 0, ownN: 0, centreSum: 0 });
@@ -377,6 +486,31 @@ function createStyleTracker(R, opts) {
         if (fm !== undefined) firstMoveByKey[key].push(fm);
       }
     }
+    // Settledness: find the maximal suffix of board moves after which the
+    // board was fully settled. Its first move is the first time the board
+    // became fully settled AND stayed so until the end; every board move from
+    // there on (the settling move included) is a post-settlement move.
+    const M = game.settledSeq.length;
+    let suffix = 0;
+    while (suffix < M && game.settledSeq[M - 1 - suffix]) suffix++;
+    if (suffix > 0) {
+      game.firstSettledBoardMoveIdx = M - suffix + 1;
+      game.firstSettledMoveIdx = game.moveIdxSeq[game.firstSettledBoardMoveIdx - 1];
+      game.postSettlementMoves = suffix;
+      for (const key in game.mvFlagsByKey) {
+        const flags = game.mvFlagsByKey[key];
+        for (let k = 0; k < flags.length; k++) {
+          if (flags[k].b < game.firstSettledBoardMoveIdx) continue;
+          overall.cls.postSettlementMoves++;
+          if (byEngine[key]) byEngine[key].cls.postSettlementMoves++;
+          if (flags[k].own) {
+            game.postSettlementOwnRegionFills++;
+            overall.cls.postSettlementOwnRegionFills++;
+            if (byEngine[key]) byEngine[key].cls.postSettlementOwnRegionFills++;
+          }
+        }
+      }
+    }
     gameLog.push(game);
   }
 
@@ -417,6 +551,12 @@ function createStyleTracker(R, opts) {
         centreMean: s.n ? Math.round((10 * s.centreSum) / s.n) / 10 : null,
       });
     }
+    const settledGames = gameLog.filter(function (g) { return g.firstSettledMoveIdx != null; });
+    const fsMove = settledGames.map(function (g) { return g.firstSettledMoveIdx; });
+    const fsBoard = settledGames.map(function (g) { return g.firstSettledBoardMoveIdx; });
+    const postMoves = settledGames.map(function (g) { return g.postSettlementMoves; });
+    const postOwn = settledGames.map(function (g) { return g.postSettlementOwnRegionFills; });
+    const meanR1 = function (arr) { return arr.length ? Math.round(10 * mean(arr)) / 10 : null; };
     return {
       games: gameLog.length,
       openingMoves: openingMoves,
@@ -431,6 +571,37 @@ function createStyleTracker(R, opts) {
         totalMoves: gameLengths.reduce(function (a, b) { return a + b; }, 0),
       },
       endReasons: endReasons,
+      settledness: {
+        definition: 'fully settled = every empty region is bordered by exactly one colour (checked after each board move); ' +
+          'firstSettled = the earliest board move after which the board stayed fully settled until the end; ' +
+          'postSettlementMoves = board moves from that move (inclusive) to the end; ' +
+          'all means/min/max are over settled games only',
+        games: gameLog.length,
+        gamesSettled: settledGames.length,
+        settledGameFracPct: gameLog.length ? Math.round((1000 * settledGames.length) / gameLog.length) / 10 : null,
+        // game-move index incl. passes, directly comparable to firstPass.moveIdx
+        firstSettledMoveIdx: {
+          mean: meanR1(fsMove),
+          min: fsMove.length ? Math.min.apply(null, fsMove) : null,
+          max: fsMove.length ? Math.max.apply(null, fsMove) : null,
+        },
+        // 1-based index among board moves only
+        firstSettledBoardMoveIdx: {
+          mean: meanR1(fsBoard),
+          min: fsBoard.length ? Math.min.apply(null, fsBoard) : null,
+          max: fsBoard.length ? Math.max.apply(null, fsBoard) : null,
+        },
+        postSettlementMoves: {
+          mean: meanR1(postMoves),
+          min: postMoves.length ? Math.min.apply(null, postMoves) : null,
+          max: postMoves.length ? Math.max.apply(null, postMoves) : null,
+          total: postMoves.reduce(function (a, b) { return a + b; }, 0),
+        },
+        postSettlementOwnRegionFills: {
+          mean: meanR1(postOwn),
+          total: postOwn.reduce(function (a, b) { return a + b; }, 0),
+        },
+      },
       passes: {
         total: overall.passes,
         perGame: gameLog.length ? Math.round((100 * overall.passes) / gameLog.length) / 100 : null,

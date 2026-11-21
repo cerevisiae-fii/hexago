@@ -23,7 +23,7 @@
 (function (globalScope) {
   'use strict';
 
-  var VERSION = 'hexago-mcts/2.1.0';
+  var VERSION = 'hexago-mcts/3.0.0';
 
   /* ------------------------------------------------------------------ *
    *  Utilities
@@ -174,7 +174,14 @@
     if (engPC < 2) engPC = 2;
     if (engPC > 6) engPC = 6;
 
-    var UCT_C = opts.uctC != null ? +opts.uctC : 1.1;
+    var UCT_C = opts.uctC != null ? +opts.uctC : 0.70;
+    var RAVE_B = opts.raveB != null ? +opts.raveB : 0.04;
+    var EXPAND_THRESH = opts.expandThresh != null ? (opts.expandThresh | 0) : 3;
+    var PW_K0 = opts.pwK0 != null ? +opts.pwK0 : 8;
+    var PW_K1 = opts.pwK1 != null ? +opts.pwK1 : 2.5;
+    var USE_PRIOR = opts.usePrior !== false;
+    var MARGIN_2P = opts.margin2p != null ? +opts.margin2p : 0.04;
+    var TREE_REUSE = opts.treeReuse !== false;
     var RANK_BLEND = opts.rankBlend != null ? Math.max(0, Math.min(1, +opts.rankBlend)) : 0.7;
     var RAVE_K = opts.raveK != null ? +opts.raveK : 1000;
     var MAX_DEPTH = Math.max(40, 2 * n + 40);
@@ -250,6 +257,10 @@
     var mvUseful = new Uint8Array(n);                // 1 = changes score / stabilizes (search candidate)
     var mvSave = new Int16Array(n);                   // own atari groups rescued by the move
     var mvStab = new Uint8Array(n);                   // 1 = adjacent own group has <= 2 liberties
+    var rootPriorW = new Float64Array(n);             // virtual prior win-sum per root move
+    var rootPriorN = new Float64Array(n);             // virtual prior visit count per root move
+    var ownNear = new Int16Array(n);                  // hex distance to nearest own stone at root
+    var rootOwnCount = 0;                             // number of own stones on root board
     var atkW = new Float64Array(8);                   // per-colour attack weight (multiplayer: hit the leader)
     var atkB = new Int16Array(n);                     // attack ordering bonus per root move
     var atkLibs = new Int16Array(n), atkSize = new Int16Array(n), atkEyes = new Int8Array(n);
@@ -403,7 +414,7 @@
     // (conservative dead-stone removal, exactly like the page's scoring).
     function computeBaseline(pc) {
       gainBoard.set(srcBoard);
-      removeDeadStones(gainBoard);
+      removeDeadStonesSmart(gainBoard, pc);
       scoreBoardInto(gainBoard, baseSc, pc);
     }
 
@@ -415,7 +426,7 @@
       capCount = 0;
       if (!applyMove(gainBoard, mv, p)) { capCount = 0; return -32768; }
       capCount = 0;
-      removeDeadStones(gainBoard);
+      removeDeadStonesSmart(gainBoard, pc);
       scoreBoardInto(gainBoard, gainSc, pc);
       return gainSc[p] - baseSc[p];
     }
@@ -544,7 +555,7 @@
         eye = ownEyeAt(srcBoard, mv, turn);
         owner = terrOwner[mv];
         mvSave[mv] = countSavesAt(srcBoard, mv, turn);
-        mvStab[mv] = countStabAt(srcBoard, mv, turn) > 0 ? 1 : 0;
+        mvStab[mv] = (!eye && countStabAt(srcBoard, mv, turn) > 0) ? 1 : 0;
         libs = rootLibs[mv];
         if (!GAIN_POLICY) {
           // ---- v2.0.0 legacy classification (A/B reference) ----
@@ -826,6 +837,183 @@
       return out;
     }
 
+    /* ---------------------------------------------------------------- *
+     *  v2.2: smart dead-stone cleanup - faithful port of the page's
+     *  detectDeadStonesSmart (region-enclosed no-two-eye groups get a local
+     *  alternating-enemy capture search).  The page scores pass-end games
+     *  with THIS logic, so terminal values that only use the conservative
+     *  list misprice groups the referee would kill: hopeless invasions look
+     *  alive and killable groups look safe.  Used at every scoring point;
+     *  the conservative removeDeadStones() stays for the self-test's 1:1
+     *  page-detectDeadStones parity checks.
+     * ---------------------------------------------------------------- */
+    var smBoard = new Int8Array(n);
+    var smGrp = new Int16Array(n), smGrpN = 0;
+    var smLibs = new Int16Array(n);
+    var smStamp = new Int32Array(n), smStampId = 0;
+    var smRegId = new Int32Array(n);
+    var smRegCols = new Int8Array(n + 8), smRegSize = new Int16Array(n + 8);
+    var smRegQueue = new Int16Array(n);
+    var smCapPos = new Int16Array(n), smCapColor = new Int8Array(n);
+    // Measured (150 ms, n=32, smart referee): smart terminal eval 48.4% vs
+    // conservative 56.3% - the per-terminal capture search adds playout value
+    // variance that is uncorrelated with the root move and hurts selection.
+    // The conservative playout-eval is the better SEARCH prior even though
+    // the real scorer is smart; smartDead stays available as an option (its
+    // 1:1 page parity is verified by dev/smart-parity.js).
+    var SMART_DEAD = opts.smartDead === true;
+    // Static final-selection guards apply only below this search size;
+    // deeper searches may legitimately prove a static-±0 move valuable.
+    // 150 ms/move reaches ~4k root visits (guards on), 800 ms ~26k (off).
+    var GUARD_MIN_VISITS = 16000;
+
+    // Empty-region table (page regionInfo): per-point region id, per-region
+    // border-colour mask and size.
+    function smRegionScan(board) {
+      var rid = 0, i, k, j, je, t, v, qn, s, mask;
+      for (i = 0; i < n; i++) smRegId[i] = -1;
+      for (i = 0; i < n; i++) {
+        if (board[i] !== 0 || smRegId[i] >= 0) continue;
+        qn = 0; smRegQueue[qn++] = i; smRegId[i] = rid; mask = 0;
+        for (k = 0; k < qn; k++) {
+          s = smRegQueue[k];
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            t = nbFlat[j]; v = board[t];
+            if (v === 0) { if (smRegId[t] < 0) { smRegId[t] = rid; smRegQueue[qn++] = t; } }
+            else mask |= (1 << v);
+          }
+        }
+        smRegCols[rid] = mask; smRegSize[rid] = qn; rid++;
+      }
+      return rid;
+    }
+
+    // Page playStoneOnBoard on the sim board (mutating + undo on suicide).
+    function smPlace(i, p) {
+      if (smBoard[i] !== 0) return 0;
+      smBoard[i] = p;
+      var aid = ++applyId;
+      var capN = 0, j, je, t, c, gi, k;
+      for (j = nbOff[i], je = nbOff[i + 1]; j < je; j++) {
+        t = nbFlat[j]; c = smBoard[t];
+        if (c === 0 || c === p || applyStamp[t] === aid) continue;
+        if (scanGroup(smBoard, t, c, 1) !== 0) continue;
+        gi = grpN;
+        for (k = 0; k < gi; k++) applyStamp[grpBuf[k]] = aid;
+        for (k = 0; k < gi; k++) { smCapPos[capN] = grpBuf[k]; smCapColor[capN] = c; capN++; }
+      }
+      for (k = 0; k < capN; k++) smBoard[smCapPos[k]] = 0;
+      scanGroup(smBoard, i, p, 1);
+      if (lastLibs === 0) {
+        smBoard[i] = 0;
+        for (k = 0; k < capN; k++) smBoard[smCapPos[k]] = smCapColor[k];
+        return 0;
+      }
+      return 1;
+    }
+
+    // Page canEnemyCaptureGroup: alternating enemy fills (any enemy colour,
+    // adjacent colours first) until the group is captured or no enemy can
+    // legally fill a liberty (alive / seki).  The group stones are in
+    // smGrp[0..smGrpN-1]; smBoard holds the working copy.
+    function canEnemyCaptureSim(color, pc) {
+      var step, li, k, j, je, t, c, libs, gid, e, ci, dup;
+      for (step = 0; step < 64; step++) {
+        gid = ++smStampId; libs = 0;
+        for (k = 0; k < smGrpN; k++) {
+          var s = smGrp[k];
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            t = nbFlat[j];
+            if (smBoard[t] === 0 && smStamp[t] !== gid) { smStamp[t] = gid; smLibs[libs++] = t; }
+          }
+        }
+        if (libs === 0) return true;
+        var moved = false;
+        for (li = 0; li < libs && !moved; li++) {
+          var l = smLibs[li];
+          var colors = [];
+          for (j = nbOff[l], je = nbOff[l + 1]; j < je; j++) {
+            c = smBoard[nbFlat[j]];
+            if (c !== 0 && c !== color) {
+              dup = false;
+              for (ci = 0; ci < colors.length; ci++) if (colors[ci] === c) { dup = true; break; }
+              if (!dup) colors.push(c);
+            }
+          }
+          for (e = 1; e <= pc; e++) {
+            if (e === color) continue;
+            dup = false;
+            for (ci = 0; ci < colors.length; ci++) if (colors[ci] === e) { dup = true; break; }
+            if (!dup) colors.push(e);
+          }
+          for (ci = 0; ci < colors.length; ci++) {
+            if (!smPlace(l, colors[ci])) continue;
+            if (smBoard[smGrp[0]] === 0) return true;      // target captured
+            moved = true;
+            break;
+          }
+        }
+        if (!moved) return false;
+      }
+      return false;
+    }
+
+    // Faithful port of the page's detectDeadStonesSmart(): every group without
+    // two eyes whose liberties all lie in small enemy-bordering regions gets
+    // the alternating capture search; the result matches what the page will
+    // actually remove at scoring.
+    function removeDeadStonesSmart(board, pc) {
+      if (!SMART_DEAD) { removeDeadStones(board); return; }
+      removeDeadStonesSmartImpl(board, pc);
+    }
+
+    function removeDeadStonesSmartImpl(board, pc) {
+      smRegionScan(board);
+      dsSeenId++; dsDeadN = 0;
+      var i, k, libN, gN, eyes, gid, enclosed, rid;
+      for (i = 0; i < n; i++) {
+        var color = board[i];
+        if (color === 0 || dsSeen[i] === dsSeenId) continue;
+        libN = scanGroupFull(board, i, color);
+        gN = grpN;
+        dsGroupId++;
+        gid = dsGroupId;
+        for (k = 0; k < gN; k++) { dsSeen[grpBuf[k]] = dsSeenId; dsGMark[grpBuf[k]] = gid; }
+        if (libN === 0) continue;
+        eyes = groupEyeCount(board, color, gid);
+        if (eyes >= 2) continue;
+        enclosed = true;
+        for (k = 0; k < libN && enclosed; k++) {
+          rid = smRegId[dsLibs[k]];
+          if (rid < 0) { enclosed = false; break; }
+          if (!(smRegCols[rid] & ~(1 << color))) { enclosed = false; break; }    // own-colour-only space: alive
+          if (smRegSize[rid] > Math.max(6, gN * 2 + 2)) { enclosed = false; break; }
+        }
+        if (!enclosed) continue;
+        smBoard.set(board);
+        // Page group() discovery order (pop-DFS, NB order): the capture sim is
+        // order-sensitive (which liberty gets filled first can decide
+        // suicide-vs-capture), so the sim must iterate liberties exactly like
+        // the page's canEnemyCaptureGroup.
+        var dId = ++smStampId, stk = [];
+        smGrpN = 0;
+        smStamp[grpBuf[0]] = dId; smGrp[smGrpN++] = grpBuf[0]; stk.push(grpBuf[0]);
+        while (stk.length) {
+          var x2 = stk.pop();
+          for (var j2 = nbOff[x2], je2 = nbOff[x2 + 1]; j2 < je2; j2++) {
+            var t2 = nbFlat[j2];
+            if (board[t2] === color && smStamp[t2] !== dId) { smStamp[t2] = dId; smGrp[smGrpN++] = t2; stk.push(t2); }
+          }
+        }
+        if (canEnemyCaptureSim(color, pc)) {
+          // smGrp is a private copy: grpBuf is clobbered by the sim's own
+          // group scans, pushing from it would remove the wrong stones.
+          for (k = 0; k < gN; k++) dsDead[dsDeadN++] = smGrp[k];
+        }
+      }
+      for (k = 0; k < dsDeadN; k++) board[dsDead[k]] = 0;
+    }
+
     // Exact page legality for one move on a scratch board (superko included).
     function simExactLegal(move, turn) {
       simBoard.set(srcBoard);
@@ -868,14 +1056,16 @@
       return cnt;
     }
 
-    // own groups adjacent to `move` that are down to <= 2 liberties: the move
-    // connects to / defends them.  Keeps needed defensive moves search-eligible
-    // even when their static score gain is 0.
+    // own groups adjacent to `move` that are down to <= 2 liberties and do NOT
+    // already have 2 eyes: the move connects to / defends them.  A 2-eye living
+    // group must never be marked as needing stabilization (otherwise its own
+    // eyes look like "stabilizing moves" and bypass the eye-fill guard).
     function countStabAt(board, move, p) {
       var sid = ++saveId, cnt = 0;
       for (var j = nbOff[move], je = nbOff[move + 1]; j < je; j++) {
         var s = nbFlat[j];
         if (board[s] !== p || saveStamp[s] === sid) continue;
+        if (GAIN_POLICY && atkStamp[s] === atkId && atkEyes[s] >= 2) continue;
         scanGroup(board, s, p, 3);
         var gi = grpN;
         for (var k = 0; k < gi; k++) saveStamp[grpBuf[k]] = sid;
@@ -891,10 +1081,18 @@
     // v2.1: gain policy orders by static score gain + attack bonus on weak enemy
     // groups (+ multiplayer leader weighting); legacy keeps the v2.0.0 ordering.
     function orderRootMoves(moves, turn, allowPass, passEnds, passGate) {
-      var scored = [], mi, mv, sc, j, je, v, own, opp, save, eye, owner, dd;
+      var scored = [], mi, mv, sc, j, je, v, own, opp, save, eye, owner, dd, dOwn;
       var opening = stoneCountRoot <= Math.max(6, (n * 0.22) | 0);
       var endgame = emptyRoot <= n * 0.55;
       var inv;
+      // Compute exact hex distance to nearest own stone for opening coherence
+      rootOwnCount = 0;
+      for (mi = 0; mi < n; mi++) if (srcBoard[mi] === turn) rootOwnCount++;
+      if (opening && rootOwnCount > 0) {
+        fillColorNear(srcBoard, turn, 8);
+        for (mi = 0; mi < n; mi++) ownNear[mi] = enemyNear[mi];
+      }
+      var radius = geo.side - 1;
       for (mi = 0; mi < moves.length; mi++) {
         mv = moves[mi];
         if (mv === -1) {
@@ -905,7 +1103,6 @@
           if (GAIN_POLICY) {
             sc = ownGain[mv] * GAIN_W + rootCap[mv] * 40 + save * 140 + atkB[mv] + rootPat[mv];
             inv = terrColorCount[mv] > 0 && !(terrColMask[mv] & (1 << turn));
-            if (inv && mvViable[mv]) sc += Math.min(terrSize[mv], 40) * 3;      // a living invasion dissolves their region
           } else {
             sc = rootCap[mv] * 1000 + save * 140 + rootPat[mv];
           }
@@ -917,21 +1114,72 @@
           sc += own * 4 + opp * 3;
           eye = ownEyeAt(srcBoard, mv, turn);
           owner = terrOwner[mv];
-          if (eye && rootCap[mv] === 0) sc -= 900;                               // never fill our own eye
-          if (terrColorCount[mv] === 1 && (terrColMask[mv] & (1 << turn)) && rootCap[mv] === 0 && save === 0 && !mvStab[mv]) sc -= 700; // never fill own territory (any size)
-          else if (owner === 0 && rootLibs[mv] >= 2) sc += 10;                   // safe neutral point (dame, +1)
+          if (eye && rootCap[mv] === 0) sc -= 900;
+          var isOwnSettled = terrColorCount[mv] === 1 && (terrColMask[mv] & (1 << turn)) && rootCap[mv] === 0 && save === 0 && !mvStab[mv];
+          if (isOwnSettled) sc -= 700;
+          else if (owner === 0 && rootLibs[mv] >= 2) sc += 10;
+
+          // Compute soft virtual prior (pn, pw) for root UCT/RAVE
+          var pRate = 0.50, pN = 0;
+          if (USE_PRIOR) {
+            pN = 5;
+            if (rootCap[mv] > 0) { pRate += 0.16; pN = 7; }
+            if (save > 0) { pRate += 0.14; pN = 7; }
+            if (rootPat[mv] >= 90) pRate += 0.10;
+            else if (rootPat[mv] >= 55) pRate += 0.06;
+            else if (rootPat[mv] >= 25) pRate += 0.02;
+            if (atkB[mv] > 400) pRate += 0.06;
+            if (rootLibs[mv] === 1 && rootCap[mv] === 0) { pRate = 0.15; pN = 8; }
+            if (isOwnSettled && terrSize[mv] < V_MIN) { pRate = 0.12; pN = 8; }
+            if (GAIN_POLICY && terrColorCount[mv] === 1 && !(terrColMask[mv] & (1 << turn)) && !mvViable[mv]) { pRate = 0.18; pN = 7; }
+          }
+
           if (opening) {
             dd = nearestStoneDist(srcBoard, mv);
-            sc += dd >= 3 ? 40 : dd === 2 ? 22 : dd === 1 ? 4 : 0;               // build a framework, not only adjacent
-            sc += (n - geomDistCenter[mv]) * (pcCur >= 3 ? 0.12 : 0.20);         // many players: the centre is contested, edges pay
-            if (pcCur >= 3 && geomDistCenter[mv] >= (geo.size - 1) * 0.35) sc += 14; // space race: corner/edge frameworks
-            if (nbMask[mv] !== FULL_MASK) sc -= 28;                              // edge penalty while opening
-            sc += rng() * 60;                                                    // opening variety (seeded)
+            var isEdge = nbMask[mv] !== FULL_MASK;
+            var dc = geomDistCenter[mv];
+            if (rootOwnCount === 0) {
+              // First stone for this player: claim a strong framework point
+              // (distance 2-3 from existing stones, avoid 1st-line edge)
+              sc += dd >= 3 ? 42 : dd === 2 ? 32 : dd === 1 ? -12 : 0;
+              if (USE_PRIOR) {
+                if (dd === 2 || dd === 3) pRate += 0.09;
+                else if (dd === 1 && stoneCountRoot <= 2) pRate -= 0.08;
+                if (isEdge) pRate -= 0.16;
+                // Prefer strong 3rd/4th-line or central-ring anchors
+                if (!isEdge && dc >= Math.max(1, radius - 3) && dc <= Math.max(2, radius - 1)) pRate += 0.04;
+              }
+            } else {
+              // Subsequent opening stones: build coherent living groups/moyo
+              // (dist 2-3 from own stones), avoid scattering lone stones far away
+              // into enemy zones (especially fatal in 3+ player games).
+              dOwn = ownNear[mv];
+              if (dOwn === 2) sc += 38;
+              else if (dOwn === 3) sc += 34;
+              else if (dOwn === 1) sc += 14;
+              else if (dOwn === 4) sc += 8;
+              else if (dOwn >= 5) sc -= (pcCur >= 3 ? 26 : 10);
+              if (USE_PRIOR) {
+                if (dOwn === 2 || dOwn === 3) pRate += 0.08;
+                else if (dOwn === 1) pRate += 0.02;
+                else if (dOwn >= 5 && dd <= 2) pRate -= (pcCur >= 3 ? 0.15 : 0.08);
+                else if (dOwn >= 5 && pcCur >= 3) pRate -= 0.08;
+                if (isEdge) pRate -= 0.14;
+              }
+            }
+            sc += (n - dc) * (pcCur >= 3 ? 0.10 : 0.20);
+            if (pcCur >= 3 && dc >= (geo.size - 1) * 0.35 && !isEdge) sc += 16;
+            if (isEdge) sc -= 32;
+            sc += rng() * 45;
           } else if (endgame) {
             sc += rng() * 4;
           } else {
             sc += rng() * 10;
           }
+          if (pRate < 0.05) pRate = 0.05;
+          if (pRate > 0.88) pRate = 0.88;
+          rootPriorN[mv] = pN;
+          rootPriorW[mv] = pN * pRate;
         }
         scored.push([sc, mv]);
       }
@@ -943,63 +1191,38 @@
     }
 
     /* ================================================================== *
-     *  Rollout ("playout") policy
+     *  Rollout ("playout") policy — O(1) incremental pseudo-liberty chains
      * ================================================================== */
 
     var pboard = new Int8Array(n);
     var empList = new Int16Array(n), empPos = new Int16Array(n), empCount = 0;
-    var candList = new Int16Array(n), candCount = 0;
-    var candOwn = new Int8Array(n), candEn = new Int8Array(n);
-    var gStamp = new Int32Array(n);
-    var gLibs = new Int16Array(n), gLibPt = new Int16Array(n), gSize = new Int16Array(n);
-    var turnId = 0;
-    var pcapCap = 4 * n + 64;
-    var pcapPos = new Int16Array(pcapCap), pcapColor = new Int8Array(pcapCap), pcapCount = 0;
+    // Incremental chain state (valid during a playout):
+    // A chain h is in exact atari iff cLibCnt[h] > 0 && cLibCnt[h]*cLibSq[h] === cLibSum[h]*cLibSum[h]
+    // (Cauchy-Schwarz equality => all pseudo-liberties are the single point cLibSum[h]/cLibCnt[h]).
+    var cHead = new Int16Array(n), cNext = new Int16Array(n), cSize = new Int16Array(n);
+    var cLibCnt = new Int32Array(n);
+    var cLibSum = new Float64Array(n), cLibSq = new Float64Array(n);
+    var pCapHeads = new Int16Array(8);
+    var pCapList = new Int16Array(n);
+    var pOwnH = new Int16Array(8);
+    var atariList = new Int16Array(n * 4 + 64), atariCount = 0;
     var stoneCnt = new Int16Array(8);
     var plyKo = -1, plyPasses = 0, plyMover = 0;
     var plyLastMove = -1, plyPrevMove = -1;
-    var anaList = new Int16Array(24), anaCount = 0;
-    var anaMark = new Int32Array(n), anaId = 0;
-    var pLastCap = 0, pLastKo = -1, pLastOwnLibs = 0;
-    var tBestCap = -1, tBestCapSize = 0, tBestSave = -1, tBestSaveSize = 0;
-    var tBestAtk2 = -1, tBestAtk2Size = 0;
     var rng = mulberry32(1);
     var amafMark = new Int32Array(n), amafWho = new Int8Array(n), amafStamp = 0;
+    // LGRF-1 (Last Good Reply with Forgetting): per-player reply to last move.
+    var USE_LGR = opts.useLgr !== false;
+    var USE_LOCAL_PAT = opts.useLocalPat !== false;
+    var lgrTable = new Int16Array(8 * n);
+    var plyHistP = new Int8Array(MAX_PLAYOUT_STEPS + 4);
+    var plyHistPrev = new Int16Array(MAX_PLAYOUT_STEPS + 4);
+    var plyHistMv = new Int16Array(MAX_PLAYOUT_STEPS + 4);
+    var plyHistLen = 0;
 
-    function playApply(move, p) {
-      pboard[move] = p;
-      var cs = pcapCount;
-      var aid = ++applyId;
-      var j, je, t, c, gi, k, captured = 0;
-      for (j = nbOff[move], je = nbOff[move + 1]; j < je; j++) {
-        t = nbFlat[j]; c = pboard[t];
-        if (c === 0 || c === p || applyStamp[t] === aid) continue;
-        if (scanGroup(pboard, t, c, 1) !== 0) continue; // has a liberty -> no capture
-        gi = grpN;
-        for (k = 0; k < gi; k++) applyStamp[grpBuf[k]] = aid;
-        for (k = 0; k < gi; k++) { pcapPos[pcapCount] = grpBuf[k]; pcapColor[pcapCount] = c; pcapCount++; captured++; }
-      }
-      if (captured > 0) {
-        for (k = cs; k < pcapCount; k++) pboard[pcapPos[k]] = 0;
-        pLastCap = captured;
-        pLastKo = captured === 1 ? pcapPos[cs] : -1;
-        pLastOwnLibs = 2;
-        return 1;
-      }
-      scanGroup(pboard, move, p, 2);
-      if (lastLibs === 0) {
-        pboard[move] = 0; pcapCount = cs;
-        pLastCap = 0; pLastKo = -1; pLastOwnLibs = 0;
-        return 0;
-      }
-      pLastCap = 0; pLastKo = -1; pLastOwnLibs = lastLibs;
-      return 1;
-    }
-
-    function playUndo(move, cs) {
-      pboard[move] = 0;
-      for (var k = cs; k < pcapCount; k++) pboard[pcapPos[k]] = pcapColor[k];
-      pcapCount = cs;
+    function addEmpty(e) {
+      empPos[e] = empCount;
+      empList[empCount++] = e;
     }
 
     function removeEmpty(e) {
@@ -1014,144 +1237,350 @@
       return 1;
     }
 
-    // Tactical scan of ONE candidate point: does playing it capture an enemy
-    // group in atari, or save an own group in atari?  Group liberty info is
-    // cached per turn, keyed by stone index.
-    function tacticScan(p, e, tid) {
-      var j, je, k, s, c, x, gi, libs, lp;
+    // Build incremental chain tables from pboard once at playout start (O(n)).
+    function playInitChains() {
+      var i, j, je, t, v, s, k, gi, cnt, sum, sq;
+      empCount = 0;
+      atariCount = 0;
+      for (i = 1; i <= pcCur; i++) stoneCnt[i] = 0;
+      for (i = 0; i < n; i++) {
+        cHead[i] = -1;
+        v = pboard[i];
+        if (v === 0) { empPos[i] = empCount; empList[empCount++] = i; }
+        else stoneCnt[v]++;
+      }
+      for (i = 0; i < n; i++) {
+        v = pboard[i];
+        if (v === 0 || cHead[i] >= 0) continue;
+        // Flood-fill initial chain into grpBuf
+        grpN = 0;
+        grpBuf[grpN++] = i;
+        cHead[i] = i;
+        cnt = 0; sum = 0; sq = 0;
+        for (k = 0; k < grpN; k++) {
+          s = grpBuf[k];
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            t = nbFlat[j];
+            if (pboard[t] === v) {
+              if (cHead[t] < 0) { cHead[t] = i; grpBuf[grpN++] = t; }
+            } else if (pboard[t] === 0) {
+              cnt++; sum += t; sq += t * t;
+            }
+          }
+        }
+        gi = grpN;
+        for (k = 0; k < gi - 1; k++) cNext[grpBuf[k]] = grpBuf[k + 1];
+        cNext[grpBuf[gi - 1]] = i;
+        cSize[i] = gi;
+        cLibCnt[i] = cnt; cLibSum[i] = sum; cLibSq[i] = sq;
+        if (cnt > 0 && cnt * sq === sum * sum && atariCount < atariList.length) atariList[atariCount++] = i;
+      }
+    }
+
+    // Non-mutating O(degree) check for playing colour `p` at empty point `e`:
+    //   0 = illegal (occupied / ko / suicide)
+    //   1 = legal and safe (>= 2 liberties, no capture)
+    //   2 = legal but self-atari (1 liberty, no capture)
+    //   3 = legal and captures at least one enemy chain
+    function checkPlayMove(e, p) {
+      if (pboard[e] !== 0 || e === plyKo) return 0;
+      var j, je, t, c, h, k, dup;
+      var eEmpty = 0, eEmptySum = 0, eEmptySq = 0;
+      var ownAdj = 0, ownHN = 0, totCnt = 0, totSum = 0, totSq = 0;
+      var anyCap = 0;
       for (j = nbOff[e], je = nbOff[e + 1]; j < je; j++) {
-        s = nbFlat[j]; c = pboard[s];
-        if (c === 0) continue;
-        if (gStamp[s] !== tid) {
-          scanGroup(pboard, s, c, 2);
-          gi = grpN; libs = lastLibs; lp = lastLibPt;
-          for (k = 0; k < gi; k++) { x = grpBuf[k]; gStamp[x] = tid; gLibs[x] = libs; gLibPt[x] = lp; gSize[x] = gi; }
-        } else { gi = gSize[s]; libs = gLibs[s]; lp = gLibPt[s]; }
-        if (libs === 1 && lp === e) {
-          if (c === p) { if (gi > tBestSaveSize) { tBestSave = e; tBestSaveSize = gi; } }
-          else { if (gi > tBestCapSize) { tBestCap = e; tBestCapSize = gi; } }
-        } else if (PLAYOUT_ATK && c !== p && libs === 2 && gi > tBestAtk2Size) {
-          // e is one of this enemy group's two liberties: playing it puts the
-          // group in atari.  Playouts that never pressure 2-lib groups
-          // systematically undervalue attacks (defensive bias).
-          tBestAtk2 = e; tBestAtk2Size = gi;
+        t = nbFlat[j]; c = pboard[t];
+        if (c === 0) {
+          eEmpty++; eEmptySum += t; eEmptySq += t * t;
+        } else if (c === p) {
+          ownAdj++;
+          h = cHead[t];
+          dup = 0;
+          for (k = 0; k < ownHN; k++) if (pOwnH[k] === h) { dup = 1; break; }
+          if (!dup) {
+            pOwnH[ownHN++] = h;
+            totCnt += cLibCnt[h]; totSum += cLibSum[h]; totSq += cLibSq[h];
+          }
+        } else {
+          h = cHead[t];
+          var lc = cLibCnt[h];
+          if (lc > 0 && lc * cLibSq[h] === cLibSum[h] * cLibSum[h] && cLibSum[h] === lc * e) anyCap = 1;
         }
       }
-    }
-
-    // Build the local candidate list for this turn and pick a small set of
-    // candidates for tactical analysis.
-    //   n <= 127 (9x9/13x13): analyse every local candidate (strongest, still fast)
-    //   larger boards: analyse only moves around the last two moves plus a few
-    //   random candidates (keeps light playouts cheap on 19x19/25x25)
-    var FULL_ANALYSIS_LIMIT = 127;
-    function analyzeTurn(p) {
-      var tid = ++turnId;
-      candCount = 0; tBestCap = -1; tBestCapSize = 0; tBestSave = -1; tBestSaveSize = 0;
-      tBestAtk2 = -1; tBestAtk2Size = 0;
-      var ei, e, j, je, local;
-      for (ei = 0; ei < empCount; ei++) {
-        e = empList[ei];
-        local = 0;
-        for (j = nbOff[e], je = nbOff[e + 1]; j < je; j++) if (pboard[nbFlat[j]] !== 0) { local = 1; break; }
-        if (local) candList[candCount++] = e;
-      }
-      if (candCount === 0 && empCount > 0) {
-        for (ei = 0; ei < empCount; ei++) candList[candCount++] = empList[ei];
-      }
-      // --- choose tactical candidates ---
-      if (n <= FULL_ANALYSIS_LIMIT) {
-        for (ei = 0; ei < candCount; ei++) tacticScan(p, candList[ei], tid);
-        return;
-      }
-      anaId++;
-      anaCount = 0;
-      var lm = plyLastMove, pm = plyPrevMove, k2;
-      if (lm >= 0) {
-        for (j = nbOff[lm], je = nbOff[lm + 1]; j < je; j++) {
-          var t = nbFlat[j];
-          if (pboard[t] === 0 && anaMark[t] !== anaId) { anaMark[t] = anaId; if (anaCount < 24) anaList[anaCount++] = t; }
-        }
-      }
-      if (pm >= 0) {
-        for (j = nbOff[pm], je = nbOff[pm + 1]; j < je; j++) {
-          var t2 = nbFlat[j];
-          if (pboard[t2] === 0 && anaMark[t2] !== anaId) { anaMark[t2] = anaId; if (anaCount < 24) anaList[anaCount++] = t2; }
-        }
-      }
-      // top up with a random sample of candidates
-      var want = 12, tries = 0;
-      while (anaCount < want && candCount > 0 && tries < 24) {
-        var e2 = candList[(rng() * candCount) | 0];
-        tries++;
-        if (anaMark[e2] === anaId) continue;
-        anaMark[e2] = anaId;
-        anaList[anaCount++] = e2;
-      }
-      for (k2 = 0; k2 < anaCount; k2++) tacticScan(p, anaList[k2], tid);
-    }
-
-    function tryAccept(p, e) {
-      if (pboard[e] !== 0) return 0;
-      if (e === plyKo) return 0;
-      var cs = pcapCount;
-      if (!playApply(e, p)) { pcapCount = cs; return 0; }
-      // Reject self-atari (own group left with a single liberty) unless it captured.
-      if (pLastCap === 0 && pLastOwnLibs === 1 && rng() < SELF_ATARI_REJECT) { playUndo(e, cs); return 0; }
-      stoneCnt[p]++;
-      for (var k = cs; k < pcapCount; k++) stoneCnt[pcapColor[k]]--;
-      removeEmpty(e);
-      amafMark[e] = amafStamp; amafWho[e] = p;
-      plyKo = pLastKo;
-      plyPrevMove = plyLastMove;
-      plyLastMove = e;
+      if (anyCap) return 3;
+      totCnt += eEmpty - ownAdj;
+      if (totCnt <= 0) return 0; // suicide
+      totSum += eEmptySum - ownAdj * e;
+      totSq += eEmptySq - ownAdj * e * e;
+      if (totCnt * totSq === totSum * totSum) return 2; // self-atari
       return 1;
     }
 
-    // One rollout turn. Returns 1 if a stone was placed, 0 if passing.
-    // v1.2.0 light local policy (kept for playing strength): captures/saves,
-    // then random local moves; never fill our own eyes (passes instead).
-    function playoutTurn(p) {
-      analyzeTurn(p);
-      if (tBestCap >= 0 && rng() < 0.9) { if (tryAccept(p, tBestCap)) return 1; }
-      if (tBestSave >= 0 && rng() < 0.85) { if (tryAccept(p, tBestSave)) return 1; }
-      if (tBestAtk2 >= 0 && rng() < 0.35) { if (tryAccept(p, tBestAtk2)) return 1; }
-      if (candCount > 0) {
-        var a, e;
-        for (a = 0; a < 8; a++) {
-          e = candList[(rng() * candCount) | 0];
-          if (isOwnEye(e, p)) continue;
-          if (tryAccept(p, e)) return 1;
+    // Commit a move already verified legal by checkPlayMove(e, p).
+    function playCommit(e, p) {
+      var eSq = e * e;
+      var j, je, t, c, h, k, s, u, hu, capHN = 0, capLN = 0;
+      pboard[e] = p;
+      removeEmpty(e);
+      stoneCnt[p]++;
+      cHead[e] = e; cNext[e] = e; cSize[e] = 1;
+      var ecnt = 0, esum = 0, esq = 0;
+      for (j = nbOff[e], je = nbOff[e + 1]; j < je; j++) {
+        t = nbFlat[j]; c = pboard[t];
+        if (c === 0) {
+          ecnt++; esum += t; esq += t * t;
+        } else {
+          h = cHead[t];
+          cLibCnt[h]--; cLibSum[h] -= e; cLibSq[h] -= eSq;
+          if (c !== p && cLibCnt[h] === 0) {
+            var dup = 0;
+            for (k = 0; k < capHN; k++) if (pCapHeads[k] === h) { dup = 1; break; }
+            if (!dup) pCapHeads[capHN++] = h;
+          }
         }
-        for (a = 0; a < candCount; a++) {
-          e = candList[a];
+      }
+      cLibCnt[e] = ecnt; cLibSum[e] = esum; cLibSq[e] = esq;
+
+      // Capture all dead enemy chains simultaneously (safe for multi-chain captures).
+      if (capHN > 0) {
+        for (k = 0; k < capHN; k++) {
+          h = pCapHeads[k];
+          var capCol = pboard[h];
+          s = h;
+          do {
+            pboard[s] = 0; cHead[s] = -1;
+            addEmpty(s);
+            stoneCnt[capCol]--;
+            pCapList[capLN++] = s;
+            s = cNext[s];
+          } while (s !== h);
+        }
+        for (k = 0; k < capLN; k++) {
+          s = pCapList[k];
+          var sSq = s * s;
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            u = nbFlat[j];
+            if (pboard[u] !== 0) {
+              hu = cHead[u];
+              cLibCnt[hu]++; cLibSum[hu] += s; cLibSq[hu] += sSq;
+            }
+          }
+        }
+      }
+
+      // Record any surviving enemy neighbour chains now in atari.
+      for (j = nbOff[e], je = nbOff[e + 1]; j < je; j++) {
+        t = nbFlat[j]; c = pboard[t];
+        if (c !== 0 && c !== p) {
+          h = cHead[t];
+          var lc = cLibCnt[h];
+          if (lc > 0 && lc * cLibSq[h] === cLibSum[h] * cLibSum[h] && atariCount < atariList.length) atariList[atariCount++] = h;
+        }
+      }
+
+      // Merge `e` with all adjacent own chains (small into large).
+      var eh = e;
+      for (j = nbOff[e], je = nbOff[e + 1]; j < je; j++) {
+        t = nbFlat[j];
+        if (pboard[t] !== p) continue;
+        h = cHead[t];
+        if (h === eh) continue;
+        var big = cSize[eh] >= cSize[h] ? eh : h;
+        var sml = big === eh ? h : eh;
+        s = sml;
+        do { cHead[s] = big; s = cNext[s]; } while (s !== sml);
+        var tmp = cNext[big]; cNext[big] = cNext[sml]; cNext[sml] = tmp;
+        cSize[big] += cSize[sml];
+        cLibCnt[big] += cLibCnt[sml]; cLibSum[big] += cLibSum[sml]; cLibSq[big] += cLibSq[sml];
+        eh = big;
+      }
+      var elc = cLibCnt[eh];
+      if (elc > 0 && elc * cLibSq[eh] === cLibSum[eh] * cLibSum[eh] && atariCount < atariList.length) atariList[atariCount++] = eh;
+
+      if (amafMark[e] !== amafStamp) { amafMark[e] = amafStamp; amafWho[e] = p; }
+      if (USE_LGR && plyLastMove >= 0 && plyHistLen < MAX_PLAYOUT_STEPS) {
+        plyHistP[plyHistLen] = p;
+        plyHistPrev[plyHistLen] = plyLastMove;
+        plyHistMv[plyHistLen] = e;
+        plyHistLen++;
+      }
+      plyKo = capLN === 1 ? pCapList[0] : -1;
+      plyPrevMove = plyLastMove;
+      plyLastMove = e;
+    }
+
+    function tryAccept(p, e, allowSelfAtariProb) {
+      var st = checkPlayMove(e, p);
+      if (st === 0) return 0;
+      if (st === 2 && (allowSelfAtariProb === 0 || rng() < SELF_ATARI_REJECT)) return 0;
+      playCommit(e, p);
+      return 1;
+    }
+
+    // Fast local hex-pattern score inside playouts (lightweight subset of patternScore).
+    function playLocalScore(e, p) {
+      var j, je, v, d, ownM = 0, enM = 0;
+      for (j = nbOff[e], je = nbOff[e + 1]; j < je; j++) {
+        v = pboard[nbFlat[j]];
+        if (v === 0) continue;
+        d = nbDirFlat[j];
+        if (v === p) ownM |= 1 << d; else enM |= 1 << d;
+      }
+      if (nbMask[e] !== 0 && ownM === nbMask[e]) return -100;
+      var sc = 0, m, m2, b1, b2, dd;
+      m = ownM;
+      while (m) {
+        b1 = m & -m; m ^= b1; m2 = m;
+        while (m2) {
+          b2 = m2 & -m2; m2 ^= b2;
+          dd = cycDiff(BITIDX[b1], BITIDX[b2]);
+          if (dd === 2) sc += 30; else if (dd === 3) sc += 18;
+        }
+      }
+      m = enM;
+      while (m) {
+        b1 = m & -m; m ^= b1; m2 = m;
+        while (m2) {
+          b2 = m2 & -m2; m2 ^= b2;
+          dd = cycDiff(BITIDX[b1], BITIDX[b2]);
+          if (dd === 3) sc += 24; else if (dd === 2) sc += 12;
+        }
+      }
+      return sc;
+    }
+
+    // One rollout turn. Returns 1 if a stone was placed, 0 if passing.
+    // O(1) incremental chain policy:
+    //  1) Local atari capture / save around last move (counter-atari first)
+    //  2) Global atari capture / save from incremental atariList
+    //  3) LGRF-1 reply to last move
+    //  4) Local hex-pattern reply around last move
+    //  5) Random local empty point (avoids own eyes and self-atari)
+    function playoutTurn(p) {
+      var j, je, t, c, h, lc, lp, k, s, u, j2, je2, uh;
+      var bestCap = -1, bestCapSz = 0, bestSave = -1, bestSaveSz = 0;
+
+      // 1. Local tactical check around plyLastMove (fast path)
+      var lm = plyLastMove;
+      if (lm >= 0 && pboard[lm] !== 0) {
+        var lh = cHead[lm];
+        if (pboard[lm] !== p) {
+          lc = cLibCnt[lh];
+          if (lc > 0 && lc * cLibSq[lh] === cLibSum[lh] * cLibSum[lh]) {
+            lp = (cLibSum[lh] / lc) | 0;
+            if (cSize[lh] > bestCapSz && checkPlayMove(lp, p) === 3) { bestCap = lp; bestCapSz = cSize[lh]; }
+          }
+        }
+        for (j = nbOff[lm], je = nbOff[lm + 1]; j < je; j++) {
+          t = nbFlat[j]; c = pboard[t];
+          if (c === 0) continue;
+          h = cHead[t];
+          lc = cLibCnt[h];
+          if (lc <= 0 || lc * cLibSq[h] !== cLibSum[h] * cLibSum[h]) continue;
+          lp = (cLibSum[h] / lc) | 0;
+          if (c === p) {
+            if (cSize[h] > bestSaveSz) {
+              // Prefer counter-capturing an adjacent enemy chain in atari if one exists
+              var stSave = checkPlayMove(lp, p);
+              if (stSave === 1 || stSave === 3) { bestSave = lp; bestSaveSz = cSize[h]; }
+            }
+          } else {
+            if (cSize[h] > bestCapSz && checkPlayMove(lp, p) === 3) { bestCap = lp; bestCapSz = cSize[h]; }
+          }
+        }
+      }
+
+      // 2. Scan and compact incremental atariList (keeps global tactical sharpness in O(atari))
+      var w = 0;
+      for (k = 0; k < atariCount; k++) {
+        h = atariList[k];
+        c = pboard[h];
+        if (c === 0 || cHead[h] !== h) continue;
+        lc = cLibCnt[h];
+        if (lc <= 0 || lc * cLibSq[h] !== cLibSum[h] * cLibSum[h]) continue;
+        atariList[w++] = h;
+        lp = (cLibSum[h] / lc) | 0;
+        if (c === p) {
+          if (cSize[h] > bestSaveSz) {
+            var stS = checkPlayMove(lp, p);
+            if (stS === 1 || stS === 3) { bestSave = lp; bestSaveSz = cSize[h]; }
+          }
+        } else {
+          if (cSize[h] > bestCapSz && checkPlayMove(lp, p) === 3) { bestCap = lp; bestCapSz = cSize[h]; }
+        }
+      }
+      atariCount = w;
+
+      if (bestCap >= 0 && rng() < 0.90) { playCommit(bestCap, p); return 1; }
+      if (bestSave >= 0 && rng() < 0.92) { playCommit(bestSave, p); return 1; }
+
+      // 3. LGRF-1: try last winning reply to plyLastMove
+      if (USE_LGR && lm >= 0) {
+        var lmv = lgrTable[p * n + lm];
+        if (lmv >= 0 && pboard[lmv] === 0 && !isOwnEye(lmv, p)) {
+          var stL = checkPlayMove(lmv, p);
+          if (stL === 1 || stL === 3) {
+            playCommit(lmv, p);
+            return 1;
+          }
+        }
+      }
+
+      // 4. Local hex-pattern response around plyLastMove
+      if (USE_LOCAL_PAT && lm >= 0 && rng() < 0.55) {
+        var bestPatMv = -1, bestPatSc = 11;
+        for (j = nbOff[lm], je = nbOff[lm + 1]; j < je; j++) {
+          t = nbFlat[j];
+          if (pboard[t] !== 0) continue;
+          var psc = playLocalScore(t, p);
+          if (psc > bestPatSc) {
+            var stP = checkPlayMove(t, p);
+            if (stP === 1 || stP === 3) { bestPatSc = psc; bestPatMv = t; }
+          }
+        }
+        if (bestPatMv >= 0) { playCommit(bestPatMv, p); return 1; }
+      }
+
+      // 5. Random empty point (fast O(1) sampling from empList; prefers points near stones)
+      if (empCount > 0) {
+        var a, e, tries = empCount < 12 ? empCount : 12;
+        for (a = 0; a < tries; a++) {
+          e = empList[(rng() * empCount) | 0];
           if (isOwnEye(e, p)) continue;
-          if (tryAccept(p, e)) return 1;
+          // Prefer local play (adjacent to at least one stone) when stones exist
+          var adj = 0;
+          for (j = nbOff[e], je = nbOff[e + 1]; j < je; j++) if (pboard[nbFlat[j]] !== 0) { adj = 1; break; }
+          if (!adj && a < 8) continue;
+          if (tryAccept(p, e, 1)) return 1;
+        }
+        // Fallback linear scan from random start so we never miss a legal non-eye move
+        var off = (rng() * empCount) | 0;
+        for (a = 0; a < empCount; a++) {
+          e = empList[(off + a) % empCount];
+          if (isOwnEye(e, p)) continue;
+          if (tryAccept(p, e, 1)) return 1;
         }
       }
       return 0;
     }
 
     function runPlayout(startMover, startKo, startPasses) {
-      var i, j, je, t, v;
       pboard.set(treeBoard);
-      empCount = 0;
-      for (i = 0; i < n; i++) if (pboard[i] === 0) { empPos[i] = empCount; empList[empCount++] = i; }
-      pcapCount = 0;
-      for (i = 1; i <= pcCur; i++) stoneCnt[i] = 0;
-      for (i = 0; i < n; i++) { v = pboard[i]; if (v !== 0) stoneCnt[v]++; }
+      playInitChains();
       plyKo = startKo; plyPasses = startPasses; plyMover = startMover;
       plyLastMove = -1; plyPrevMove = -1;
+      plyHistLen = 0;
       var maxSteps = MAX_PLAYOUT_STEPS;
       for (var step = 0; step < maxSteps; step++) {
         var played = playoutTurn(plyMover);
         if (played === 0) { plyPasses++; plyKo = -1; plyLastMove = -1; plyPrevMove = -1; }
+        else { plyPasses = 0; }
         if (plyPasses >= activeCount) break;
         var t2 = plyMover;
         do { t2 = (t2 % pcCur) + 1; } while (outFlags[t2]);
         plyMover = t2;
       }
-      removeDeadStones(pboard);
+      removeDeadStonesSmart(pboard, pcCur);
       scoreBoardInto(pboard, outSc, pcCur);
     }
 
@@ -1174,10 +1603,16 @@
       // Multiplayer: blend rank-1 probability with the score margin so a seat
       // that cannot win still prefers to improve its rank / hurt the leader
       // (kingmaking awareness) instead of playing randomly.
+      // 2P: small score-margin blend keeps winning/losing positions sharp.
       if (pcCur >= 3) {
         for (p = 1; p <= pcCur; p++) {
           if (outFlags[p]) continue;
           winArr[p] = winArr[p] * RANK_BLEND + (valArr[p] * 0.5 + 0.5) * (1 - RANK_BLEND);
+        }
+      } else if (MARGIN_2P > 0) {
+        for (p = 1; p <= pcCur; p++) {
+          if (outFlags[p]) continue;
+          winArr[p] = winArr[p] * (1 - MARGIN_2P) + (valArr[p] * 0.5 + 0.5) * MARGIN_2P;
         }
       }
     }
@@ -1191,6 +1626,7 @@
         mover: mover, move: move, parent: parent, depth: depth,
         passes: passes, ko: ko,
         n: 0, w: 0, v: 0, rn: 0, rw: 0,
+        pn: 0, pw: 0,
         children: null, untried: null,
         terminal: false, termScores: null
       };
@@ -1280,25 +1716,23 @@
     function selectUCT(node, isRoot) {
       var kids = node.children, ln = Math.log(node.n + 1);
       var best = kids[0], bestV = -1e18;
+      var rb2 = 4 * RAVE_B * RAVE_B;
       for (var i = 0; i < kids.length; i++) {
         var ch = kids[i];
         if (ch.n <= 0) { return ch; }
         // ch.w / ch.rw are accumulated for the mover of `node` (the parent).
-        var q = ch.w / ch.n;
+        var pn = isRoot ? ch.pn : 0;
+        var wn = ch.n + pn;
+        var q = (ch.w + (isRoot ? ch.pw : 0)) / wn;
         if (ch.rn > 0) {
           // MoGo-style RAVE weight: conservative early, decaying with visits.
-          var b = 0.05, rn = ch.rn, nv = ch.n;
-          var beta = rn / (rn + nv + 4 * nv * rn * b * b);
+          var rn = ch.rn;
+          var beta = rn / (rn + wn + wn * rn * rb2);
           q = (1 - beta) * q + beta * (ch.rw / rn);
         }
         var v = q + curC * Math.sqrt(ln / ch.n);
-        // Progressive bias: a certain-kill root move (enclosed enemy group)
-        // gets early exploration priority so an N-stone capture is never
-        // drowned in playout noise on big open boards.  Decays to a floor - a
-        // verified capture is always worth taking unless the playout value
-        // refutes it clearly.
         if (isRoot && ch.move >= 0 && atkB[ch.move] > 2000) {
-          v += Math.max(0.35, 1.2 - 0.025 * ch.n);
+          v += Math.max(0, 1.2 - 0.025 * ch.n);
         }
         if (v > bestV) { bestV = v; best = ch; }
       }
@@ -1307,7 +1741,7 @@
 
     function terminalScores(board) {
       dsBoard.set(board);
-      removeDeadStones(dsBoard);
+      removeDeadStonesSmart(dsBoard, pcCur);
       scoreBoardInto(dsBoard, scoreScratch, pcCur);
       var t = new Int16Array(pcCur + 1);
       t.set(scoreScratch.subarray(0, pcCur + 1));
@@ -1319,7 +1753,6 @@
       if (libId > 1000000000) { libStamp.fill(0); libId = 0; }
       if (applyId > 1000000000) { applyStamp.fill(0); applyId = 0; }
       if (saveId > 1000000000) { saveStamp.fill(0); saveId = 0; }
-      if (turnId > 1000000000) { gStamp.fill(0); turnId = 0; }
       if (regId > 1000000000) { regStamp.fill(0); regId = 0; }
     }
 
@@ -1410,17 +1843,15 @@
       var passGate = GAIN_POLICY ? (noUsefulRoot && !enemyThreat) : noUsefulRoot;
       var allowPass = passEnds || passGate || legal.length <= 1;
 
-      // Root search candidates: only moves that change the score or stabilize.
-      // (Legacy policy searches every legal move; A/B reference.)
-      var candMoves = legal;
+      // Root search candidates: exclude pure non-capture own eyes unconditionally
+      // so neither single-worker search nor multi-worker rootMoves merging can
+      // ever waste visits on or select an own eye fill.
+      var candMoves = [];
       if (GAIN_POLICY && RESTRICT_CAND) {
-        candMoves = [];
         for (i = 0; i < legal.length; i++) {
           if (legal[i] >= 0 && mvUseful[legal[i]]) candMoves.push(legal[i]);
         }
         if (candMoves.length === 0) {
-          // No useful move but opponents can still gain: defend.  Anything that
-          // is not an eye fill / self-atari / doomed invasion is considered.
           for (i = 0; i < legal.length; i++) {
             var fm = legal[i];
             if (fm < 0) continue;
@@ -1430,20 +1861,23 @@
             candMoves.push(fm);
           }
         }
+      } else {
+        for (i = 0; i < legal.length; i++) {
+          var lm0 = legal[i];
+          if (lm0 >= 0 && rootCap[lm0] === 0 && ownEyeAt(srcBoard, lm0, turn)) continue;
+          candMoves.push(lm0);
+        }
       }
-      var candMark = legalMark;   // reuse: 1 = searchable root placement
-      if (GAIN_POLICY) {
-        if (RESTRICT_CAND) candMark = new Uint8Array(n);
-        for (i = 0; i < candMoves.length; i++) if (candMoves[i] >= 0) candMark[candMoves[i]] = 1;
-        if (allowPass && candMoves[candMoves.length - 1] !== -1) candMoves.push(-1);
-      }
+      var candMark = new Uint8Array(n);
+      for (i = 0; i < candMoves.length; i++) if (candMoves[i] >= 0) candMark[candMoves[i]] = 1;
+      if (allowPass && candMoves[candMoves.length - 1] !== -1) candMoves.push(-1);
 
       // The position is frozen for everyone: passing is the correct decision
       // (instant, zero playouts - this is where the endgame time budget goes).
       if (passGate) {
         simBoard.set(srcBoard);
         capCount = 0;
-        removeDeadStones(simBoard);
+        removeDeadStonesSmart(simBoard, pc);
         scoreBoardInto(simBoard, outSc, pc);
         computeOutcome();
         var passVal = winArr[rootMover], passScore = valArr[rootMover];
@@ -1463,41 +1897,61 @@
       var outSig = 0;
       for (i = 1; i <= pc; i++) if (outFlags[i]) outSig |= (1 << i);
 
-      // ---- Tree reuse: adopt a stored child whose position == current position.
-      if (oldRoot && oldRoot.children && oldRoot.children.length && oldRoot.pc === pc && oldRoot.outSig === outSig && oldRoot.boardCopy) {
-        var chs = oldRoot.children, ci, ch, okR, eq;
-        for (ci = 0; ci < chs.length; ci++) {
-          ch = chs[ci];
-          if (ch.mover !== turn || ch.passes !== passes) continue;
-          if (ch.move !== -1 && !legalMark[ch.move]) continue;
-          if (ch.move === -1) {
-            if (ch.passes !== passes) continue;
-            for (eq = 1, i = 0; i < n; i++) { if (oldRoot.boardCopy[i] !== srcBoard[i]) { eq = 0; break; } }
-          } else {
-            cmpBoard.set(oldRoot.boardCopy);
-            capCount = 0;
-            okR = applyMove(cmpBoard, ch.move, oldRoot.mover);
-            capCount = 0;
-            if (!okR) continue;
-            eq = 1;
-            for (i = 0; i < n; i++) if (cmpBoard[i] !== srcBoard[i]) { eq = 0; break; }
-          }
-          if (!eq) continue;
-          // Validate that the adopted subtree's root children are still root-legal moves.
-          var kids = ch.children;
-          if (kids) {
-            for (var ki = 0; ki < kids.length; ki++) {
-              var km = kids[ki].move;
-              if (km !== -1 && !legalMark[km]) { eq = 0; break; }
+      // ---- Multi-ply tree reuse: search oldRoot up to `activeCount` plies deep
+      // so tree reuse works in real 2P (depth 2) and 3P..6P (depth 3..6) games
+      // where each seat calls think() only on its own turn.
+      if (TREE_REUSE && oldRoot && oldRoot.children && oldRoot.children.length && oldRoot.pc === pc && oldRoot.outSig === outSig && oldRoot.boardCopy) {
+        var maxReuseDepth = Math.min(activeCount, 4);
+        var reuseBudget = 300;
+        var reuseBoard = cmpBoard;
+        reuseBoard.set(oldRoot.boardCopy);
+        var findReuse = function (curNode, depth) {
+          if (root !== null || reuseBudget <= 0) return;
+          var chs = curNode.children;
+          if (!chs || !chs.length) return;
+          // Visit highest-visit children first (most likely played line)
+          var ord = chs.length <= 1 ? chs : chs.slice().sort(function (a, b) { return b.n - a.n; });
+          for (var ci = 0; ci < ord.length && root === null && reuseBudget > 0; ci++) {
+            var ch = ord[ci];
+            if (ch.n <= 0) continue;
+            reuseBudget--;
+            var hsR = capCount, okR = 1;
+            if (ch.move >= 0) {
+              if (reuseBoard[ch.move] !== 0) continue;
+              okR = applyMove(reuseBoard, ch.move, curNode.mover);
+              if (!okR) { capCount = hsR; continue; }
             }
+            var endR = capCount;
+            if (ch.mover === turn && ch.passes === passes) {
+              var eq = 1;
+              for (var bi = 0; bi < n; bi++) { if (reuseBoard[bi] !== srcBoard[bi]) { eq = 0; break; } }
+              if (eq) {
+                var kids = ch.children;
+                if (kids) {
+                  for (var ki = 0; ki < kids.length; ki++) {
+                    var km = kids[ki].move;
+                    if (km !== -1 && !legalMark[km]) { eq = 0; break; }
+                  }
+                }
+                if (eq) root = ch;
+              }
+            }
+            if (root === null && depth < maxReuseDepth && ch.children && ch.children.length) {
+              findReuse(ch, depth + 1);
+            }
+            if (ch.move >= 0) undoMove(reuseBoard, ch.move, hsR, endR);
+            else capCount = hsR;
           }
-          if (eq) { root = ch; break; }
-        }
+        };
+        capCount = 0;
+        findReuse(oldRoot, 1);
+        capCount = 0;
       }
 
       if (root) {
         root.parent = null;
-        root.depth = 0;
+        root.terminal = false;
+        root.termScores = null;
         root.ko = -1; // root legality is exact (superko), not simple ko
         root.passes = passes;
         root.boardCopy = new Int8Array(n); root.boardCopy.set(srcBoard);
@@ -1531,6 +1985,14 @@
         var ordered = orderRootMoves(candMoves, turn, allowPass, passEnds, passGate);
         var untried = [];
         for (i = 0; i < ordered.length; i++) { if (ordered[i] === -1 || !childMark[ordered[i]]) untried.push(ordered[i]); }
+        // Refresh virtual priors on adopted root children for the new position
+        if (root.children) {
+          for (i = 0; i < root.children.length; i++) {
+            var rch = root.children[i];
+            if (rch.move >= 0) { rch.pn = rootPriorN[rch.move]; rch.pw = rootPriorW[rch.move]; }
+            else { rch.pn = 0; rch.pw = 0; }
+          }
+        }
         root.untried = untried;
         if (!root.children) root.children = [];
       } else {
@@ -1545,6 +2007,7 @@
       var deadline = start + budgetMs;
       var it = 0;
       var bestSoFar = -1;
+      if (USE_LGR) lgrTable.fill(-1);
 
       while (true) {
         if (timeLimited) {
@@ -1559,10 +2022,24 @@
         var node = root, leaf = null;
         while (true) {
           if (node.terminal) { leaf = node; break; }
-          if (node.untried === null) {
-            node.untried = node.depth === rootDepth ? orderRootMoves(candMoves, turn, allowPass, passEnds, passGate) : buildUntried(node.mover, node.depth - rootDepth);
+          var isAtRoot = (node === root);
+          // Expansion threshold: do not allocate untried move lists until an
+          // internal leaf has been visited EXPAND_THRESH times.
+          if (!isAtRoot && node.untried === null && node.n < EXPAND_THRESH) {
+            leaf = node;
+            break;
           }
-          if (node.untried.length > 0) {
+          if (node.untried === null) {
+            node.untried = isAtRoot ? orderRootMoves(candMoves, turn, allowPass, passEnds, passGate) : buildUntried(node.mover, node.depth - rootDepth);
+          }
+          // Progressive widening at internal nodes: deepen promising variations
+          // instead of exhausting all 60-120 untried moves before depth 2.
+          var allowExpand = node.untried.length > 0;
+          if (allowExpand && !isAtRoot && PW_K1 > 0 && node.children && node.children.length > 0) {
+            var maxK = PW_K0 + PW_K1 * Math.sqrt(node.n);
+            if (node.children.length >= maxK) allowExpand = false;
+          }
+          if (allowExpand) {
             var expanded = false;
             while (node.untried.length > 0) {
               var mv = node.untried.pop();
@@ -1581,8 +2058,9 @@
               if (treeBoard[mv] !== 0 || mv === node.ko) continue;
               var hs = capCount;
               if (!applyMove(treeBoard, mv, node.mover)) { capCount = hs; continue; }
-              amafMark[mv] = amafStamp; amafWho[mv] = node.mover;
+              if (amafMark[mv] !== amafStamp) { amafMark[mv] = amafStamp; amafWho[mv] = node.mover; }
               child = makeNode(nextActivePlayer(node.mover), mv, node, node.depth + 1, 0, lastKo);
+              if (isAtRoot) { child.pn = rootPriorN[mv]; child.pw = rootPriorW[mv]; }
               if (!node.children) node.children = [];
               node.children.push(child);
               histMove[histLen] = mv; histCapStart[histLen] = hs; histCapEnd[histLen] = capCount; histLen++;
@@ -1592,11 +2070,14 @@
               break;
             }
             if (expanded) break;
-            // All untried moves were illegal at this node; score it as terminal.
-            node.terminal = true;
-            node.termScores = terminalScores(treeBoard);
-            leaf = node;
-            break;
+            if (node.children && node.children.length > 0) {
+              // Remaining untried moves were illegal; fall through to UCT selection
+            } else {
+              node.terminal = true;
+              node.termScores = terminalScores(treeBoard);
+              leaf = node;
+              break;
+            }
           }
           // -------- all moves tried: UCT selection --------
           if (node.children && node.children.length > 0) {
@@ -1607,8 +2088,8 @@
             } else {
               var hs2 = capCount;
               var okS = applyMove(treeBoard, sel.move, node.mover);
-              amafMark[sel.move] = amafStamp; amafWho[sel.move] = node.mover;
-              histMove[histLen] = sel.move; histCapStart[histLen] = hs2; histCapEnd[capCount]; histLen++;
+              if (amafMark[sel.move] !== amafStamp) { amafMark[sel.move] = amafStamp; amafWho[sel.move] = node.mover; }
+              histMove[histLen] = sel.move; histCapStart[histLen] = hs2; histCapEnd[histLen] = capCount; histLen++;
               node = sel;
               if (!okS) { /* should never happen: legality checked at creation */ }
             }
@@ -1635,6 +2116,15 @@
         // PARENT (the player who chose the move into it).  This makes UCT at any
         // node maximize its own mover's outcome, also in 3..6 player games.
         computeOutcome();
+        // LGRF-1 update: record winner's replies, forget loser's replies.
+        if (USE_LGR && plyHistLen > 0) {
+          for (var li = 0; li < plyHistLen; li++) {
+            var lp2 = plyHistP[li], lprev = plyHistPrev[li], lmv2 = plyHistMv[li];
+            var lidx = lp2 * n + lprev;
+            if (winArr[lp2] >= 0.5) lgrTable[lidx] = lmv2;
+            else if (lgrTable[lidx] === lmv2) lgrTable[lidx] = -1;
+          }
+        }
         var nd = leaf, par;
         while (nd.parent !== null) {
           par = nd.parent;
@@ -1711,29 +2201,44 @@
           }
         }
       }
-      // Never fill our own eye / own settled territory (any size) and never
-      // return a 100%-dead invasion while a better search candidate exists.
-      // Under the gain policy these are already excluded from the candidates;
-      // with full search freedom (default) this guard is the guarantee.
+      // Unconditional own-eye guard: NEVER fill a pure own eye (no capture) at
+      // any search depth.  Filling an eye of a 2-eye group can kill our own
+      // group and gains at most 0 points under area scoring.
+      if (move >= 0 && rootCap[move] === 0 && ownEyeAt(srcBoard, move, turn) && root.children) {
+        var bestNoEye = null;
+        for (i = 0; i < root.children.length; i++) {
+          var ce = root.children[i];
+          if (ce.move < 0 || ce.n <= 0) continue;
+          if (rootCap[ce.move] === 0 && ownEyeAt(srcBoard, ce.move, turn)) continue;
+          if (bestNoEye === null || ce.n > bestNoEye.n) bestNoEye = ce;
+        }
+        move = bestNoEye !== null ? bestNoEye.move : -1;
+      }
+      // Never fill own settled territory (small/uninvadable unconditionally,
+      // larger own regions below GUARD_MIN_VISITS) and never return a 100%-dead
+      // invasion below GUARD_MIN_VISITS while a better search candidate exists.
       if (move >= 0 && rootCap[move] === 0 && !mvStab[move] && mvSave[move] === 0) {
-        var badSelf = ownEyeAt(srcBoard, move, turn) ||
-          (terrColorCount[move] === 1 && (terrColMask[move] & (1 << turn)));
-        var badInv = GAIN_POLICY && terrColorCount[move] === 1 &&
+        var isOwnReg = terrColorCount[move] === 1 && (terrColMask[move] & (1 << turn));
+        var badSmallOwn = isOwnReg && terrSize[move] < V_MIN;
+        var badSelf = badSmallOwn || (root.n < GUARD_MIN_VISITS && isOwnReg);
+        var badInv = root.n < GUARD_MIN_VISITS && GAIN_POLICY && terrColorCount[move] === 1 &&
           !(terrColMask[move] & (1 << turn)) && !mvViable[move];
         if ((badSelf || badInv) && root.children) {
           var bestGood = null;
           for (i = 0; i < root.children.length; i++) {
             var cg = root.children[i];
             if (cg.move < 0 || cg.n <= 0) continue;
+            if (rootCap[cg.move] === 0 && ownEyeAt(srcBoard, cg.move, turn)) continue;
             if (rootCap[cg.move] === 0 && !mvStab[cg.move] && mvSave[cg.move] === 0) {
-              if (ownEyeAt(srcBoard, cg.move, turn) ||
-                  (terrColorCount[cg.move] === 1 && (terrColMask[cg.move] & (1 << turn)))) continue;
-              if (GAIN_POLICY && terrColorCount[cg.move] === 1 &&
+              var cgOwn = terrColorCount[cg.move] === 1 && (terrColMask[cg.move] & (1 << turn));
+              if (cgOwn && (cgOwn && terrSize[cg.move] < V_MIN || root.n < GUARD_MIN_VISITS)) continue;
+              if (root.n < GUARD_MIN_VISITS && GAIN_POLICY && terrColorCount[cg.move] === 1 &&
                 !(terrColMask[cg.move] & (1 << turn)) && !mvViable[cg.move]) continue;
             }
             if (bestGood === null || cg.n > bestGood.n) bestGood = cg;
           }
           if (bestGood !== null) move = bestGood.move;
+          else if (badSmallOwn) move = -1;
         }
       }
       // Safety: never return an illegal placement.
@@ -1817,6 +2322,16 @@
       _rootLegalMoves: rootLegalMovesImpl,
       _scoreBoard: scoreBoardImpl,
       _deadStones: deadStonesImpl,
+      // v2.2: smart dead-stone port (page detectDeadStonesSmart parity;
+      // verified 1:1 by dev/smart-parity.js).  Always runs the smart logic so
+      // the parity tool measures the port itself, not the SMART_DEAD default.
+      _deadStonesSmart: function (board, pc) {
+        var out = [];
+        dsBoard.set(board);
+        removeDeadStonesSmartImpl(dsBoard, pc | 0 || 2);
+        for (var q = 0; q < n; q++) if (board[q] !== 0 && dsBoard[q] === 0) out.push(q);
+        return out;
+      },
       _patternScore: function (board, i, p) { return patternScore(board, i, p | 0); },
       _territoryOwner: function (board) {
         computeTerritory(board, pcCur);

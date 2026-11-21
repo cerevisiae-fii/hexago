@@ -594,3 +594,152 @@ fills 1.7% (v2.0.0 fills whenever a region exceeds 12% of the board); eye fills 
 doomed invasions down to ~1/3 of v2.0.0's rate; every game fully settled at the end
 (post-settlement filler ~2 moves); passes now happen only after the dame is gone
 (the old build passed with 41% of the board still open).
+
+## 12. AI v2.2 — strength-first re-goal, true-rules referee, tuning sweep (v2.2.0)
+
+User correction: lightness was only ever a stepping stone - **the goal is maximum
+strength, even if slower**.  pool.js budgets restored to 12 s / 15 s with up to
+8 workers (the pass-honouring fix and the instant endgame pass stay: those are
+correctness, not lightness).  The measurable target became "beats the shipped
+v2.0.0 decisively" at the reference budget (150 ms/move, n>=64).
+
+### The referee was lying (and so was the engine's terminal eval)
+
+The bench referee scored pass-end games with the **conservative**
+`detectDeadStones()`, but the page's actual pass-end scorer is
+**`detectDeadStonesSmart()`** (region-enclosed no-two-eye groups get an
+alternating-enemy capture search).  Fixed on both sides:
+
+- `bench/lib/rules.js` now implements the page's smart scorer (regionInfo +
+  playStoneOnBoard + canEnemyCaptureGroup + detectDeadStonesSmart), and
+  `finishByPass` scores with it.  `bench/lib/old-ai.js` extracts the page's
+  smart function (plus playStoneOnBoard / canEnemyCaptureGroup) and the
+  cross-check now verifies BOTH dead-stone detectors 1:1 against the page.
+- The engine gained the same port (`removeDeadStonesSmart`, opt-in
+  `createEngine({ smartDead: true })`) with `dev/smart-parity.js` verifying it
+  against the page's function on crafted + 120 random positions (2-6 players,
+  all sizes).  Two real bugs were found by that parity harness before shipping:
+  the dead-list collection read a scratch buffer clobbered by the sim's own
+  group scans (wrong stones removed), and the capture sim iterated liberties in
+  a different order than the page's group() discovery (order-sensitive: which
+  liberty is filled first can decide suicide vs capture).  After the fixes the
+  port is 1:1.
+
+### What the measurements said (all vs frozen v2.0.0, 150 ms/move, smart referee)
+
+| config | winrate | note |
+|---|---|---|
+| shipped v2.1.0 (bias floor 0.35) | 51.6% (conservative referee era) | baseline then |
+| v2.1 + certain-kill floor removed | **71.9%** (n=32, conservative referee) | the floor starved strategic moves |
+| v2.1 + floor removed + smart terminal eval + smart referee | 48.4% (n=64) | see below |
+| same, engine smart-eval OFF (conservative playouts) | **56.3%** (n=32) | smart eval hurts search |
+| + UCT_C 1.1 -> 0.95 | **71.9%** (n=32) | lower exploration wins |
+| + playout save probability 0.85 -> 0.92 | 65.6% (n=32) | rescue atari more often |
+| smart referee alone changes the game: all numbers after this section are smart-referee | - | old numbers not comparable |
+
+Three lessons:
+1. **Accurate terminal scoring made the search WEAKER.**  The per-terminal
+   capture search removes large dead-ish groups from every playout outcome,
+   adding score variance that is uncorrelated with the root move; the
+   conservative eval is a smoother search prior.  The engine therefore ships
+   with conservative playout-eval by default (`smartDead` opt-in); the REFEREE
+   stays smart because that is the truth of the real game.
+2. **The certain-kill bias floor was quietly toxic** (-16% under the smart
+   referee).  Root selection over-commits visits to tactical kills and starves
+   strategic moves - this was also the "attacks too much" feel.  The decaying
+   head start (to zero) stays; the permanent floor is gone.
+3. **Static guards must yield to deep search verdicts.**  Redirecting the final
+   choice away from a static-±0-looking move (own-fill / doomed invasion)
+   costs -25% at 800 ms when the search has actually PROVEN the move good
+   (56.3% with the guards off vs 31% with them on, n=16).  The guards now apply
+   only below GUARD_MIN_VISITS = 16000 root visits: 150 ms reaches ~4k (guards
+   on, behaviour guaranteed), 800 ms reaches ~26k (deep verdicts trusted).
+
+### Final configuration (v2.2.0)
+
+- conservative terminal eval (default), smart available via `smartDead`
+- certain-kill bias decays to zero (no floor)
+- no invasion ordering bonus (gain already prices invasions)
+- UCT_C = 1.1 (unchanged: the 0.95 sweep result did not survive n=64),
+  playout save probability 0.92 (the measured +12.5 points)
+- pool.js: 12 s / 15 s budgets, up to 8 workers (strength-first)
+
+### Validation (v2.2.0 checkpoint)
+
+| match | result |
+|---|---|
+| 2P 9-board, 150 ms/move (6 seeds, n=96, smart ref) | 57.3% (55-41), illegal 0 |
+| 2P 9-board, 800 ms/move (n=16, smart ref) | 62.5% (10-6), illegal 0 |
+| 3P 13-board, 300 ms/move (n=16 games, smart ref) | A 37.5% (9-15) vs B 29.2% (7-17), illegal 0 |
+
+v2.2.0 had two remaining flaws found in the 3P 13-board logs: (1) eye fills
+reappeared (65 moves, 3.3%) because `countStabAt` flagged 2-eye living groups
+(which have 2 liberties) as weak and endgame searches exceeded `GUARD_MIN_VISITS`,
+bypassing the eye guard; (2) opening stones still scattered widely (mean
+`nearestOwn` 4.3 on 13-board) and 13-board throughput (~2.6k pps) left the root
+best move with only ~12 visits at 300 ms.
+
+## 13. AI v3.0 — O(1) incremental chains, deeper tree search, coherent openings (v3.0.0)
+
+### Root causes & architecture upgrades
+
+1. **O(1) incremental pseudo-liberty chains in playouts** (`playInitChains`,
+   `checkPlayMove`, `playCommit`): replaces per-ply full-board `scanGroup` flood
+   fills with circular-linked chains tracking `(cLibCnt, cLibSum, cLibSq)` in
+   exact integer arithmetic (Float64). Exact atari test is O(1) via Cauchy-Schwarz
+   (`cLibCnt * cLibSq === cLibSum * cLibSum`, unique liberty `cLibSum / cLibCnt`).
+   Suicide, capture, and self-atari are all checked non-mutating in O(degree <= 6).
+   Verified 1:1 against `bench/lib/rules.js` across 360 random games / 61,744
+   moves (2..6 players, sizes 9 & 13) with 0 mismatches.
+2. **Playout bugfixes & local sharpness**:
+   - Captured intersections are now restored to `empList` (`addEmpty`), enabling
+     recaptures, ko fights, and throw-ins during rollouts.
+   - `plyPasses` now resets to 0 on every placement (previously non-consecutive
+     passes could terminate rollouts early).
+   - Incremental `atariList` + last-move local atari/hex-pattern response +
+     LGRF-1 (Last Good Reply with Forgetting).
+   - First-play AMAF rule (`if (amafMark[e] !== amafStamp)`) and `histCapEnd[histLen]`
+     undo index fix.
+3. **Unconditional eye-fill & 2-eye living-group fix**:
+   - `countStabAt` skips own groups that already have `>= 2` eyes.
+   - Pure non-capture own eyes are excluded from root candidates unconditionally
+     (so neither single-worker search nor 8-worker `pool.js` merging can ever fill
+     an eye) and guarded unconditionally at final selection.
+   - Small uninvadable own-territory pockets (`terrSize < V_MIN`) are also guarded
+     unconditionally; larger invadable own territories still trust deep search.
+4. **Deeper MCTS search & coherent opening framework**:
+   - Internal expansion threshold (`EXPAND_THRESH = 3`) + internal progressive
+     widening (`PW_K0 = 8, PW_K1 = 2.5`) + tuned `UCT_C = 0.70`, `RAVE_B = 0.04`,
+     and 2P score-margin tiebreaker (`MARGIN_2P = 0.04`).
+   - Soft virtual root priors (`rootPriorN/W`, kept separate from exact visit
+     counts `ch.n`) from captures/saves/hex-patterns and player-count-adaptive
+     opening coherence: rewards dist 2-3 from own stones, penalizes 1st-line edge
+     clinging and isolated dist >= 5 scattering near opponents (especially in 3P+).
+   - Multi-ply tree reuse (up to `min(activeCount, 4)` plies) so tree reuse
+     actually fires across opponent turns in real 2P..6P games.
+
+### Throughput (Node v26.13.1, pure zero-dependency JS)
+
+| board | v2.0.0 | v2.2.0 | **v3.0.0** | speedup vs v2.0.0 |
+|---|---:|---:|---:|---:|
+| 9-board (61 pts) | 6,300 pps | 8,993 pps | **19,688 pps** | **3.1x** |
+| 13-board (127 pts) | 1,800 pps | 2,552 pps | **10,020 pps** | **5.6x** |
+| 19-board (271 pts) | 550 pps | 1,057 pps | **4,684 pps** | **8.5x** |
+| 25-board (469 pts) | 210 pps | 491 pps | **2,690 pps** | **12.8x** |
+
+### Final validation (v3.0.0 vs frozen v2.0.0, smart referee, 0 illegal / 0 crashes)
+
+| benchmark | result | behaviour highlights |
+|---|---|---|
+| 2P 9-board, 150 ms/move (4 seeds, n=64) | **93.8%** (60W-4L-0D) | eyeFills **0**, ownRegionFills **0**, doomedInvasions **0** |
+| 2P 9-board, 800 ms/move (2 seeds, n=16) | **93.8%** (15W-1L-0D) | eyeFills **0**, illegal **0** |
+| 3P 13-board, 300 ms/move (16 games / 48 seats) | **16-0 in games** (A seat 66.7% 16W-8L vs B 0.0% 0W-24L) | A: eye **0**, own **0**, doomed **3.3%** (vs B 9.8%), openNearestOwn **2.7** (vs B 4.5), openCentre **2.9** (vs B 4.2) |
+| 3P 13-board self-play, 150 ms/move (n=4) | avg **208.8** moves, **4/4 settled** | eye **0**, own 1, postSettleOwn **0**, illegal **0** |
+| 4P 13-board self-play, 100 ms/move (n=2) | avg **293.0** moves, **2/2 settled** | eye **0**, own **0**, illegal **0** |
+| `dev/engine-selftest.js` | **68/68 PASS** | — |
+| `dev/smart-parity.js 40` | **42/42 PASS** | 1:1 page `detectDeadStonesSmart` parity |
+| `dev/probe-behavior.js --time 300 --assert` | **ALL PASS** (A/B/E/F/G1-G3) | 2-eye group never fills eye; 3P13 opening meanNearestOwn 3.14, isolated(>=6) 11.1%, 1st-line 0.0% |
+
+Ablation notes (Stage 2 vs Stage 1 at 150 ms n=24: `UCT_C=0.70` 83.3% > `0.45` 75.0% > `0.25` 70.8%; 3P13 @300 ms x12: Stage 2 beat Stage 1 11-1 in games while cutting doomed invasions 85 -> 39 and opening `nearestOwn` 3.8 -> 2.6).
+
+Build md5: `af69b2bd7bc5b87fa10a6b609ccb70f7` (`hexago-mcts/3.0.0`).

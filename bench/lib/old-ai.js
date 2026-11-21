@@ -34,13 +34,14 @@ const DEFAULT_PAGE = path.join(__dirname, '..', '..', 'index.html');
 const REQUIRED_SYMBOLS = [
   'group', 'libCount', 'hash', 'sim', 'territory', 'territoryForBoard',
   'countEyes', 'regionInfo', 'hexDist', 'territoryNowForAI', 'aiChoose',
+  'playStoneOnBoard', 'canEnemyCaptureGroup', 'detectDeadStonesSmart',
 ];
 
 /** Symbols exported from the sandbox for cross-checking / benchmarking. */
 const PAGE_API_NAMES = [
   'aiChoose', 'sim', 'territory', 'territoryForBoard', 'group', 'libCount',
   'hash', 'countEyes', 'regionInfo', 'hexDist', 'territoryNowForAI',
-  'detectDeadStones',
+  'detectDeadStones', 'detectDeadStonesSmart', 'playStoneOnBoard', 'canEnemyCaptureGroup',
 ];
 
 const API_SCRIPT = '[' + PAGE_API_NAMES.map(function (n) {
@@ -400,7 +401,7 @@ function crossCheckRules(oldAI, R, opts) {
     positions: 0,
     movesChecked: 0,
     territoryChecked: 0,
-    deadChecked: 0,
+    deadChecked: 0, smartDeadChecked: 0,
     hashChecked: 0,
     hashOk: true,
     mismatches: [],
@@ -482,6 +483,21 @@ function testPosition(oldAI, R, st, out, fail) {
       }
     } catch (e) {
       fail('dead-throw', { error: String(e.message) });
+    }
+  }
+
+  // smart dead-stone detection: THIS is what the page actually scores with at
+  // pass end (doPass -> detectDeadStonesSmart).  The referee must match it.
+  if (typeof oldAI.api.detectDeadStonesSmart === 'function' && typeof R.detectDeadStonesSmart === 'function') {
+    try {
+      const dPage = Array.from(oldAI.api.detectDeadStonesSmart()).sort(function (a, b) { return a - b; });
+      const dOurs = R.detectDeadStonesSmart(st).sort(function (a, b) { return a - b; });
+      out.smartDeadChecked++;
+      if (dPage.length !== dOurs.length || dPage.some(function (v, i) { return v !== dOurs[i]; })) {
+        fail('smart-dead', { page: dPage, ours: dOurs });
+      }
+    } catch (e) {
+      fail('smart-dead-throw', { error: String(e.message) });
     }
   }
 }

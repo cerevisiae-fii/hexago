@@ -19,18 +19,14 @@ const AI_WORKER_URL = (function () {
 
 function aiBudgetMs() {
   if (aiTestBudgetMs != null) return aiTestBudgetMs;
-  // 最強固定だが軽量に。終盤は利得ベースで即断（think が0プレイアウトで返る）ため、
-  // この予算が実際に消費されるのは中盤だけ。大盤ほど1手の影響が大きいので時間を増やす。
-  const pts = P.length;
-  if (pts >= 450) return 6000;   // 25路
-  if (pts >= 250) return 4000;   // 19路
-  if (pts >= 120) return 3000;   // 13路
-  return 2500;                   // 9路
+  // 最強固定。目標は「できる限り強い」ことで、計算時間は従来どおり最大を充てる。
+  // 終盤の利得即断（0プレイアウトのパス）だけは維持: あれは省略ではなく正しい終盤。
+  return P.length >= 250 ? 15000 : 12000;
 }
 function aiPoolWant() {
   const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-  // メインスレッドを空けるため cores-1 を上限に、かつ4並列で十分（root並列マージ）。
-  let want = Math.min(4, Math.max(1, cores - 1));
+  // メインスレッドを空けるため cores-1 を上限に。低メモリ端末では控えめに。
+  let want = Math.min(8, Math.max(1, cores));
   const mem = (typeof navigator !== 'undefined' && navigator.deviceMemory) || 8;
   if (mem <= 4) want = Math.min(want, 2);
   return Math.max(1, want);

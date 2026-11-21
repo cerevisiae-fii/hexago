@@ -151,9 +151,13 @@ Hex board of radius `SIDE-1`, `SIDE=(size+1)/2`, index order of the page
   happened** (page `sim`). Hash is the page cyrb53 over the board array.
 - Pass: `passes` counts consecutive passes and resets on a real move; when
   `passes >= activePlayers` (non-resigned) the game ends and is scored exactly
-  like the page: conservative `detectDeadStones()` cleanup, then
+  like the page: **`detectDeadStonesSmart()`** cleanup (the page's actual
+  pass-end scorer: region-enclosed no-two-eye groups get an alternating-enemy
+  capture search - cross-checked 1:1 against the page function), then
   `score = territory + stones`, territory = empty regions bordered by exactly
-  one colour. Captures (`damage`) are not scored.
+  one colour. Captures (`damage`) are not scored. The conservative
+  `detectDeadStones()` stays exported and cross-checked as a page-parity
+  reference, but the referee scores with the smart list, matching the page.
 - Resignation: the player is marked `out`, keeps their stones, never moves
   again; if only one active player remains the game ends immediately.
 - Winner among active players = highest area score; ties are draws.

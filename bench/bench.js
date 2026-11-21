@@ -868,7 +868,7 @@ function formatMatchReport(res) {
     const c = d.crossCheck;
     L.push('rules cross-check : ' + (c.ok ? 'OK' : 'FAIL') + ' vs page sim/territory -- ' +
       c.positions + ' positions, ' + c.movesChecked + ' move legality, ' + c.territoryChecked + ' territory, ' +
-      c.deadChecked + ' dead-stone, ' + c.hashChecked + ' hash vectors');
+      c.deadChecked + ' dead-stone, ' + (c.smartDeadChecked || 0) + ' smart-dead-stone, ' + c.hashChecked + ' hash vectors');
     if (!c.ok) for (let k = 0; k < Math.min(3, c.mismatches.length); k++) L.push('  ! ' + JSON.stringify(c.mismatches[k]));
   }
   if (d.engineVerify) {

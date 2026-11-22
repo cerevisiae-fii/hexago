@@ -795,4 +795,10 @@ full, and wasted moves around already-dead stones.
 | `dev/engine-selftest.js` / `dev/smart-parity.js` | **68/68** / **42/42 PASS** | 13-board 9.9k pps, 25-board 2.6k pps |
 | `dev/probe-behavior.js --time 300 --assert` | **ALL PASS** (A/B/E/F/G1-G3/H1-H3) | H1 10-pt 2-eye pocket instant pass (even @1500ms); H2 smart-dead stone both sides pass; H3 trapped stone no piling |
 
-Build md5: `5a9ec3f87fab0334a4659567dd8e0d06` (`hexago-mcts/3.1.0`).
+- Follow-up 4-worker-merged audit fix (`capLive === 0` in Rule 2 + `rootMoves`
+  own-territory/eye/unjustified-pass filtering): eliminates 0-gain suicidal
+  captures of already-smart-dead stones in 3rd-player territories (smart-dead
+  <=14pt invasions 13 -> 2, -85%; 0 ownFills / 0 eyeFills across 301 moves in
+  4-worker merged 3P13 games; 2P9@150ms sanity 93.8% 30W-2L vs v2.0.0).
+
+Build md5: `120cd1e0a60fba0be2adb56c7f0c7ac9` (`hexago-mcts/3.1.0`).

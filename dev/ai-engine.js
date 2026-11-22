@@ -784,19 +784,30 @@
         g = staticGainFor(mv, turn, pcCur);
         var diesImm = mvDiesImm[mv];
         var enDrop = mvEnemyDrop[mv];
+        // Did `mv` capture any enemy stone that was ALIVE on cleanBoard?
+        // Capturing ONLY stones that were already dead under detectDeadStonesSmart
+        // while our own stone also immediately dies is pure 0-gain noise.
+        var capLive = 0;
+        if (rootCap[mv] > 0) {
+          for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
+            var sc2 = nbFlat[j];
+            if (cleanBoard[sc2] !== 0 && cleanBoard[sc2] !== turn && cleanLibs[sc2] === 1) { capLive = 1; break; }
+          }
+        }
 
         // Hopeless-move classification (unconditionally excluded from root
-        // candidates and 8-worker rootMoves so deep searches NEVER dump dead
-        // stones into 2-eye enemy territories or waste moves on dead stones,
-        // while NEVER blocking eye-making for unfinished own groups or attacks
-        // against <2-eye enemy walls).
+        // candidates and multi-worker rootMoves so neither fast nor beta mode
+        // ever dumps dead stones into 2-eye enemy territories or recycles dead
+        // captures, while NEVER blocking eye-making for unfinished own groups
+        // or attacks against <2-eye enemy walls).
         var hopeless = 0;
         if (eye && rootCap[mv] === 0) {
           // Rule 1: pure own eye — NEVER fill
           hopeless = 1;
-        } else if (diesImm && ownN === 0 && rootCap[mv] === 0 && g <= 0 && enDrop <= 0 && !nearWeakEn) {
+        } else if (diesImm && ownN === 0 && capLive === 0 && g <= 0 && enDrop <= 0 && !nearWeakEn) {
           // Rule 2: lone stone dropped into enclosed space that detectDeadStonesSmart
-          // immediately removes with <= 0 score effect (never blocks connecting/eye-making)
+          // immediately removes with <= 0 score effect (even if it captures an
+          // already-smart-dead stone in a 3rd player's territory).
           hopeless = 1;
         } else if (inv && cAlive && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
           // Rule 3: single-enemy territory whose surrounding wall ALREADY has 2 eyes!
@@ -2514,12 +2525,35 @@
 
       // -------- assemble result --------
       // Full root statistics (for root-parallel search: K workers can be merged
-      // by summing visits / winrate*visits per move).
+      // by summing visits / winrate*visits per move).  Filter out moves that
+      // failed the own-territory / eye guards (when a non-guarded move exists)
+      // so multi-worker pool.js merges never leak guarded fills.
       var rootMoves = [];
       if (root.children) {
+        var hasUnguardedRM = false;
+        for (i = 0; i < root.children.length; i++) {
+          var rc0 = root.children[i];
+          if (rc0.n <= 0 || rc0.move < 0) continue;
+          if (rootCap[rc0.move] === 0 && ownEyeAt(srcBoard, rc0.move, turn)) continue;
+          if (rootCap[rc0.move] === 0 && !mvStab[rc0.move] && mvSave[rc0.move] === 0) {
+            var rcOwn = terrColorCount[rc0.move] === 1 && (terrColMask[rc0.move] & (1 << turn));
+            if (rcOwn && (terrSize[rc0.move] < V_MIN || (root.n < GUARD_MIN_VISITS))) continue;
+          }
+          hasUnguardedRM = true;
+          break;
+        }
+        var passOkRM = passEnds || passGate;
         for (i = 0; i < root.children.length; i++) {
           var rmc = root.children[i];
           if (rmc.n <= 0) continue;
+          if (rmc.move === -1 && !passOkRM && hasUnguardedRM) continue;
+          if (rmc.move >= 0 && hasUnguardedRM) {
+            if (rootCap[rmc.move] === 0 && ownEyeAt(srcBoard, rmc.move, turn)) continue;
+            if (rootCap[rmc.move] === 0 && !mvStab[rmc.move] && mvSave[rmc.move] === 0) {
+              var rmOwn = terrColorCount[rmc.move] === 1 && (terrColMask[rmc.move] & (1 << turn));
+              if (rmOwn && (terrSize[rmc.move] < V_MIN || (root.n < GUARD_MIN_VISITS))) continue;
+            }
+          }
           rootMoves.push({
             move: rmc.move,
             visits: rmc.n,

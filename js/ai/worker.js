@@ -10,13 +10,14 @@ self.onmessage = function (e) {
   var id = d.id;
   try {
     var st = d.state || {};
-    var key = String(st.size) + ':' + String(st.playerCount);
+    var opts = d.options || {};
+    var style = (opts.style === 'solid' || opts.style === 'aggressive') ? opts.style : 'balanced';
+    var key = String(st.size) + ':' + String(st.playerCount) + ':' + style;
     var eng = __hexEngines[key];
     if (!eng) {
-      eng = HexagoAI.createEngine({ size: st.size, playerCount: st.playerCount });
+      eng = HexagoAI.createEngine({ size: st.size, playerCount: st.playerCount, style: style });
       __hexEngines[key] = eng;
     }
-    var opts = d.options || {};
     var lastP = 0;
     opts.onProgress = function (p) {
       var t = (typeof performance !== 'undefined' ? performance.now() : Date.now());

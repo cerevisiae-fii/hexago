@@ -125,12 +125,21 @@
       <div class="flex flex-col gap-2" id="seatBtns"></div>
     </div>
     <div id="aiModeConfig" class="flex flex-col gap-1.5">
-      <label class="text-xs font-bold tracking-wider text-neutral-500">AI モード</label>
+      <label class="text-xs font-bold tracking-wider text-neutral-500">AI 思考時間</label>
       <div class="grid grid-cols-2 gap-2" id="aiModeBtns">
         <button type="button" data-ai-mode="fast" class="opt">高速（標準）</button>
-        <button type="button" data-ai-mode="beta" class="opt">最強（β）</button>
+        <button type="button" data-ai-mode="deep" class="opt">長考（最強）</button>
       </div>
-      <p class="text-[11px] leading-relaxed text-neutral-500">高速は 2.5〜6秒・最大4並列で軽快に打ちます。最強（β）は 12〜15秒・最大8並列で深く読みます。</p>
+      <p class="text-[11px] leading-relaxed text-neutral-500">高速は 2.5〜6秒・最大4並列、長考は 12〜15秒・最大8並列で深く読みます。</p>
+    </div>
+    <div id="aiStyleConfig" class="flex flex-col gap-1.5">
+      <label class="text-xs font-bold tracking-wider text-neutral-500">AI 棋風（重み）</label>
+      <div class="grid grid-cols-3 gap-2" id="aiStyleBtns">
+        <button type="button" data-ai-style="solid" class="opt">堅実</button>
+        <button type="button" data-ai-style="balanced" class="opt">バランス</button>
+        <button type="button" data-ai-style="aggressive" class="opt">攻撃的</button>
+      </div>
+      <p class="text-[11px] leading-relaxed text-neutral-500">堅実は連結・守り重視、攻撃的は切断・弱石攻め重視（死に侵入・眼埋め防止は全棋風で有効）。</p>
     </div>
     <div id="onlineBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-3 hidden text-xs">
       <div id="hostRoomSection" class="flex flex-col gap-1.5">

@@ -23,7 +23,7 @@
 (function (globalScope) {
   'use strict';
 
-  var VERSION = 'hexago-mcts/3.1.0';
+  var VERSION = 'hexago-mcts/3.2.0';
 
   /* ------------------------------------------------------------------ *
    *  Utilities
@@ -174,7 +174,16 @@
     if (engPC < 2) engPC = 2;
     if (engPC > 6) engPC = 6;
 
-    var UCT_C = opts.uctC != null ? +opts.uctC : 0.70;
+    var STYLE = (opts.style === 'solid' || opts.style === 'aggressive') ? opts.style : 'balanced';
+    var styleUctC = STYLE === 'solid' ? 0.60 : (STYLE === 'aggressive' ? 0.85 : 0.70);
+    var styleRankBlend = STYLE === 'solid' ? 0.55 : (STYLE === 'aggressive' ? 0.82 : 0.70);
+    var ATK_SCALE = STYLE === 'solid' ? 0.55 : (STYLE === 'aggressive' ? 1.60 : 1.0);
+    var CAP_PROB = STYLE === 'solid' ? 0.88 : (STYLE === 'aggressive' ? 0.96 : 0.90);
+    var SAVE_PROB = STYLE === 'solid' ? 0.97 : (STYLE === 'aggressive' ? 0.88 : 0.92);
+    var CONN_PRIOR = STYLE === 'solid' ? 1.35 : (STYLE === 'aggressive' ? 0.85 : 1.0);
+    var LEAD_ATK = STYLE === 'solid' ? 1.15 : (STYLE === 'aggressive' ? 1.50 : 1.25);
+
+    var UCT_C = opts.uctC != null ? +opts.uctC : styleUctC;
     var RAVE_B = opts.raveB != null ? +opts.raveB : 0.04;
     var EXPAND_THRESH = opts.expandThresh != null ? (opts.expandThresh | 0) : 3;
     var PW_K0 = opts.pwK0 != null ? +opts.pwK0 : 8;
@@ -182,7 +191,7 @@
     var USE_PRIOR = opts.usePrior !== false;
     var MARGIN_2P = opts.margin2p != null ? +opts.margin2p : 0.04;
     var TREE_REUSE = opts.treeReuse !== false;
-    var RANK_BLEND = opts.rankBlend != null ? Math.max(0, Math.min(1, +opts.rankBlend)) : 0.7;
+    var RANK_BLEND = opts.rankBlend != null ? Math.max(0, Math.min(1, +opts.rankBlend)) : styleRankBlend;
     var RAVE_K = opts.raveK != null ? +opts.raveK : 1000;
     var MAX_DEPTH = Math.max(40, 2 * n + 40);
     var MAX_PLAYOUT_STEPS = 2 * n + 30;
@@ -277,8 +286,8 @@
     var cleanGSize = new Int16Array(n);
     var cleanRegSeen = new Int32Array(n + 8), cleanRegSeenId = 0;
     var cleanDameExists = false;
-    var LIVE_MIN_2EYE = n <= 80 ? 11 : 15;            // min empty space to realistically live inside a 2-eye enemy wall
-    var LIVE_MIN_TINY = n <= 80 ? 9 : 11;             // min empty space inside solid enemy wall without weak enemy groups
+    var LIVE_MIN_2EYE = (n <= 80 ? 11 : 15) + (STYLE === 'solid' ? 3 : 0); // min empty space to realistically live inside a 2-eye enemy wall
+    var LIVE_MIN_TINY = (n <= 80 ? 9 : 11) + (STYLE === 'solid' ? 2 : 0);  // min empty space inside solid enemy wall without weak enemy groups
     var rootPriorW = new Float64Array(n);             // virtual prior win-sum per root move
     var rootPriorN = new Float64Array(n);             // virtual prior visit count per root move
     var ownNear = new Int16Array(n);                  // hex distance to nearest own stone at root
@@ -304,7 +313,7 @@
     // frozen v2.0.0 at 800 ms on the 61-point board).  Default OFF; behaviour
     // is instead guaranteed by the final-selection guards + the pass gate.
     var RESTRICT_CAND = opts.restrictCand === true;  // root candidates = useful moves only (A/B)
-    var SELF_ATARI_REJECT = (opts.playerCount | 0) >= 4 ? 0.99 : 0.95;
+    var SELF_ATARI_REJECT = STYLE === 'solid' ? 0.99 : ((opts.playerCount | 0) >= 4 ? 0.99 : 0.95);
 
     function pop6(m) { var c = 0; while (m) { m &= m - 1; c++; } return c; }
     function cycDiff(a, b) { var d = a - b; if (d < 0) d = -d; return d > 3 ? 6 - d : d; }
@@ -619,7 +628,7 @@
         if (worst < 0 || baseSc[e] < baseSc[worst]) worst = e;
       }
       for (e = 1; e <= pc; e++) atkW[e] = 1;
-      if (pc >= 3 && best > 0) atkW[best] = 1.25;                       // hit the leader
+      if (pc >= 3 && best > 0) atkW[best] = LEAD_ATK;                   // hit the leader
       if (pc >= 3 && worst > 0 && worst !== best) atkW[worst] = 0.7;   // spare the last
       var ownWeak = false, hasEnemy = false;
       for (i = 0; i < n; i++) {
@@ -771,10 +780,12 @@
         var ownSrcOnly = rid >= 0 && cCnt === 1 && (cMask & (1 << turn));
         // Does it touch a LIVE weak enemy group (ignoring already-smart-dead stones)?
         nearWeakEn = 0;
+        var nearAtari2En = 0;
         for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
           var s = nbFlat[j];
           if (cleanBoard[s] !== 0 && cleanBoard[s] !== turn && cleanLibs[s] <= 3 && cleanEyes[s] < 2 && cleanOwnRegs[s] < 2) {
-            nearWeakEn = 1; break;
+            nearWeakEn = 1;
+            if (cleanLibs[s] <= 2) nearAtari2En = 1;
           }
         }
         // Does it rescue/stabilize an own group on srcBoard?
@@ -796,18 +807,23 @@
         }
 
         // Hopeless-move classification (unconditionally excluded from root
-        // candidates and multi-worker rootMoves so neither fast nor beta mode
-        // ever dumps dead stones into 2-eye enemy territories or recycles dead
-        // captures, while NEVER blocking eye-making for unfinished own groups
-        // or attacks against <2-eye enemy walls).
+        // candidates and multi-worker rootMoves across ALL styles & budgets so
+        // neither fast nor deep mode ever dumps dead stones into 2-eye enemy
+        // territories or recycles dead captures, while NEVER blocking eye-making
+        // for unfinished own groups or attacks against <2-eye enemy walls).
         var hopeless = 0;
         if (eye && rootCap[mv] === 0) {
           // Rule 1: pure own eye — NEVER fill
           hopeless = 1;
-        } else if (diesImm && ownN === 0 && capLive === 0 && g <= 0 && enDrop <= 0 && !nearWeakEn) {
-          // Rule 2: lone stone dropped into enclosed space that detectDeadStonesSmart
-          // immediately removes with <= 0 score effect (even if it captures an
-          // already-smart-dead stone in a 3rd player's territory).
+        } else if (diesImm && rootCap[mv] > 0 && capLive === 0 && g <= 0 && enDrop <= 0 && !saveOwn) {
+          // Rule 2a: capturing ONLY already-smart-dead stones (e.g. in a 3rd
+          // player's territory) while our newly placed stone ALSO immediately dies
+          // with <= 0 score effect — unconditionally forbidden regardless of nearby walls.
+          hopeless = 1;
+        } else if (diesImm && ownN === 0 && rootCap[mv] === 0 && g <= 0 && enDrop <= 0 && !nearAtari2En) {
+          // Rule 2b: lone stone dropped into enclosed space that detectDeadStonesSmart
+          // immediately removes with <= 0 score effect (only allowed if touching
+          // a live <=2-lib enemy group for a genuine throw-in / capturing race).
           hopeless = 1;
         } else if (inv && cAlive && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
           // Rule 3: single-enemy territory whose surrounding wall ALREADY has 2 eyes!
@@ -856,7 +872,7 @@
         if (eye && rootCap[mv] === 0) useful = false;
         if (libs === 1 && rootCap[mv] === 0) useful = false;
         mvUseful[mv] = useful ? 1 : 0;
-        atkB[mv] = (ATK_ORDER && !hopeless) ? atkBonusAt(mv, turn) : 0;
+        atkB[mv] = (ATK_ORDER && !hopeless) ? ((atkBonusAt(mv, turn) * ATK_SCALE) | 0) : 0;
         if (useful) noUsefulRoot = false;
       }
       if (GAIN_POLICY) computeEnemyThreat(turn, pcCur, ownWeak);
@@ -1388,12 +1404,12 @@
           var pRate = 0.50, pN = 0;
           if (USE_PRIOR) {
             pN = 5;
-            if (rootCap[mv] > 0) { pRate += 0.16; pN = 7; }
-            if (save > 0) { pRate += 0.14; pN = 7; }
-            if (rootPat[mv] >= 90) pRate += 0.10;
-            else if (rootPat[mv] >= 55) pRate += 0.06;
-            else if (rootPat[mv] >= 25) pRate += 0.02;
-            if (atkB[mv] > 400) pRate += 0.06;
+            if (rootCap[mv] > 0) { pRate += 0.16 * (STYLE === 'aggressive' ? 1.15 : 1.0); pN = 7; }
+            if (save > 0) { pRate += 0.14 * CONN_PRIOR; pN = 7; }
+            if (rootPat[mv] >= 90) pRate += 0.10 * CONN_PRIOR;
+            else if (rootPat[mv] >= 55) pRate += 0.06 * CONN_PRIOR;
+            else if (rootPat[mv] >= 25) pRate += 0.02 * CONN_PRIOR;
+            if (atkB[mv] > 400) pRate += 0.06 * ATK_SCALE;
             if (rootLibs[mv] === 1 && rootCap[mv] === 0) { pRate = 0.15; pN = 8; }
             if (isOwnSettled && terrSize[mv] < V_MIN) { pRate = 0.12; pN = 8; }
             if (GAIN_POLICY && terrColorCount[mv] === 1 && !(terrColMask[mv] & (1 << turn)) && !mvViable[mv]) { pRate = 0.18; pN = 7; }
@@ -1776,8 +1792,8 @@
       }
       atariCount = w;
 
-      if (bestCap >= 0 && rng() < 0.90) { playCommit(bestCap, p); return 1; }
-      if (bestSave >= 0 && rng() < 0.92) { playCommit(bestSave, p); return 1; }
+      if (bestCap >= 0 && rng() < CAP_PROB) { playCommit(bestCap, p); return 1; }
+      if (bestSave >= 0 && rng() < SAVE_PROB) { playCommit(bestSave, p); return 1; }
 
       // 3. LGRF-1: try last winning reply to plyLastMove
       if (USE_LGR && lm >= 0) {

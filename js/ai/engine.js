@@ -1,29 +1,28 @@
 /*!
  * HEXAGO AI engine — self-contained MCTS/UCT player for hexagonal Go.
- * Version: 1.0.0
+ * Version: 2.1.0
  *
  * Runs in Node (module.exports) and inside a Web Worker (`self.HexagoAI`).
  * No dependencies, no DOM, no network, no eval.  ES2017-compatible.
  *
  * Public API:
  *   geometry(size) -> { size, side, n, P, NB, center, dist(i,j) }
- *   createEngine({ size, playerCount }) -> engine
+ *   createEngine({ size, playerCount, style }) -> engine
  *   engine.think(state, options) -> result
- *   hashBoard(board) -> number   (identical to index.html cyrb53 board hash)
+ *   hashBoard(board) -> number   (identical to js/core/state.js cyrb53 board hash)
  *   version
  *
- * Rules are a 1:1 port of index.html build()/sim()/territory()/finishScore():
+ * Rules are a 1:1 port of js/core/rules.js build()/sim()/territory()/finishScore():
  * hex board of odd size 9/13/19/25 (61/127/271/469 points), capture Go,
  * suicide illegal, superko checked only on captures, pass ends the game when
  * all active players pass, score = territory + stones.
  *
- * This file is the single source of truth for the page build: dev/inline-engine.js
- * copies it verbatim into index.html inside the #ai-engine-src script tag.
+ * Synced to js/ai/engine.js via dev/sync-engine.js.
  */
 (function (globalScope) {
   'use strict';
 
-  var VERSION = 'hexago-mcts/3.2.0';
+  var VERSION = 'hexago-mcts/2.1.0';
 
   /* ------------------------------------------------------------------ *
    *  Utilities

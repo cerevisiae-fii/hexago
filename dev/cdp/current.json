@@ -1,13 +1,13 @@
 {
   "tool": "hexago-cdp-regress",
   "schema": 1,
-  "generatedAt": "2026-11-05T23:40:13.833Z",
+  "generatedAt": "2026-11-21T14:41:44.896Z",
   "page": "http://<server>/index.html",
-  "durationMs": 5571,
-  "ok": true,
+  "durationMs": 5212,
+  "ok": false,
   "summary": {
-    "pass": 34,
-    "fail": 0,
+    "pass": 32,
+    "fail": 2,
     "total": 34
   },
   "checks": [
@@ -34,7 +34,7 @@
     {
       "name": "canvas が初期描画されている",
       "ok": true,
-      "detail": "{\"cssW\":520,\"cssH\":520,\"pxW\":520,\"pxH\":520}"
+      "detail": "{\"cssW\":300,\"cssH\":150,\"pxW\":300,\"pxH\":150}"
     },
     {
       "name": "初回起動で設定モーダルが開く",
@@ -49,7 +49,7 @@
     {
       "name": "AI が think() で合法手を返す",
       "ok": true,
-      "detail": "8,51,48"
+      "detail": "30,37,14"
     },
     {
       "name": "think() が盤面を書き換えない",
@@ -104,17 +104,17 @@
     {
       "name": "盤サイズ 9 で開始でき AI が合法手を返す",
       "ok": true,
-      "detail": "{\"move\":9,\"visits\":7888,\"boardLength\":61}"
+      "detail": "{\"move\":16,\"visits\":11208,\"boardLength\":61}"
     },
     {
       "name": "盤サイズ 13 で開始でき AI が合法手を返す",
       "ok": true,
-      "detail": "{\"move\":104,\"visits\":3024,\"boardLength\":127}"
+      "detail": "{\"move\":11,\"visits\":5616,\"boardLength\":127}"
     },
     {
       "name": "盤サイズ 19 で開始でき AI が合法手を返す",
       "ok": true,
-      "detail": "{\"move\":127,\"visits\":824,\"boardLength\":271}"
+      "detail": "{\"move\":25,\"visits\":2872,\"boardLength\":271}"
     },
     {
       "name": "sessionStorage に hexago-save-v1 が保存される",
@@ -153,23 +153,23 @@
     },
     {
       "name": "mobile 390x844 でレイアウトが破綻しない",
-      "ok": true,
-      "detail": "{\"canvas\":{\"cssW\":366,\"cssH\":366,\"pxW\":732,\"pxH\":732,\"left\":12,\"top\":213},\"scrollWidth\":390,\"overflow\":false,\"modals\":[]}"
+      "ok": false,
+      "detail": "{\"canvas\":{\"cssW\":600,\"cssH\":300,\"pxW\":600,\"pxH\":300,\"left\":8,\"top\":212.88},\"scrollWidth\":608,\"overflow\":false,\"modals\":[]}"
     },
     {
       "name": "mobile のスクリーンショットを保存",
       "ok": true,
-      "detail": "mobile-390x844.png (138011 bytes)"
+      "detail": "mobile-390x844.png (132908 bytes)"
     },
     {
       "name": "desktop 1280x800 でレイアウトが破綻しない",
-      "ok": true,
-      "detail": "{\"canvas\":{\"cssW\":520,\"cssH\":520,\"pxW\":520,\"pxH\":520,\"left\":380,\"top\":241},\"scrollWidth\":1280,\"overflow\":false,\"modals\":[]}"
+      "ok": false,
+      "detail": "{\"canvas\":{\"cssW\":600,\"cssH\":300,\"pxW\":600,\"pxH\":300,\"left\":8,\"top\":212.88},\"scrollWidth\":1280,\"overflow\":false,\"modals\":[]}"
     },
     {
       "name": "desktop のスクリーンショットを保存",
       "ok": true,
-      "detail": "desktop-1280x800.png (70346 bytes)"
+      "detail": "desktop-1280x800.png (82050 bytes)"
     },
     {
       "name": "JS 例外が発生していない",
@@ -414,18 +414,18 @@
           "dpr": 2,
           "mobile": true
         },
-        "innerWidth": 390,
-        "innerHeight": 844,
+        "innerWidth": 608,
+        "innerHeight": 1316,
         "dpr": 2,
         "canvas": {
-          "cssW": 366,
-          "cssH": 366,
-          "pxW": 732,
-          "pxH": 732,
-          "left": 12,
-          "top": 213
+          "cssW": 600,
+          "cssH": 300,
+          "pxW": 600,
+          "pxH": 300,
+          "left": 8,
+          "top": 212.88
         },
-        "scrollWidth": 390,
+        "scrollWidth": 608,
         "horizontalOverflow": false,
         "shot": "mobile-390x844.png"
       },
@@ -440,12 +440,12 @@
         "innerHeight": 800,
         "dpr": 1,
         "canvas": {
-          "cssW": 520,
-          "cssH": 520,
-          "pxW": 520,
-          "pxH": 520,
-          "left": 380,
-          "top": 241
+          "cssW": 600,
+          "cssH": 300,
+          "pxW": 600,
+          "pxH": 300,
+          "left": 8,
+          "top": 212.88
         },
         "scrollWidth": 1280,
         "horizontalOverflow": false,
@@ -455,7 +455,12 @@
     "errors": {
       "consoleErrors": [],
       "exceptions": [],
-      "resourceWarnings": []
+      "resourceWarnings": [
+        "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+        "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+        "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+        "Failed to load resource: net::ERR_INTERNET_DISCONNECTED"
+      ]
     }
   },
   "observations": {
@@ -465,30 +470,30 @@
       "wantWorkers": 8,
       "error": "",
       "loaded": true,
-      "workerUrl": "http://127.0.0.1:44283/js/ai/worker.js"
+      "workerUrl": "http://127.0.0.1:36785/js/ai/worker.js"
     },
     "ai": {
       "moves": [
         {
-          "move": 8,
+          "move": 30,
           "legal": true,
           "mutated": false,
           "played": true,
-          "visits": 10680
+          "visits": 12904
         },
         {
-          "move": 51,
+          "move": 37,
           "legal": true,
           "mutated": false,
           "played": true,
-          "visits": 11632
+          "visits": 15371
         },
         {
-          "move": 48,
+          "move": 14,
           "legal": true,
           "mutated": false,
           "played": true,
-          "visits": 15272
+          "visits": 20646
         }
       ],
       "engineAfter": {
@@ -497,7 +502,7 @@
         "wantWorkers": 8,
         "error": "",
         "loaded": true,
-        "workerUrl": "http://127.0.0.1:44283/js/ai/worker.js"
+        "workerUrl": "http://127.0.0.1:36785/js/ai/worker.js"
       }
     },
     "screenshots": [
@@ -507,15 +512,41 @@
   },
   "logs": {
     "consoleErrors": [],
-    "consoleWarnings": [
-      "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation",
-      "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation"
-    ],
+    "consoleWarnings": [],
     "exceptions": [],
-    "resourceErrors": []
+    "resourceErrors": [
+      {
+        "level": "error",
+        "source": "network",
+        "text": "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+        "url": "https://cdn.tailwindcss.com/",
+        "at": "2026-11-21T14:41:39.983Z"
+      },
+      {
+        "level": "error",
+        "source": "network",
+        "text": "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+        "url": "https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js",
+        "at": "2026-11-21T14:41:39.985Z"
+      },
+      {
+        "level": "error",
+        "source": "network",
+        "text": "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+        "url": "https://cdn.tailwindcss.com/",
+        "at": "2026-11-21T14:41:43.555Z"
+      },
+      {
+        "level": "error",
+        "source": "network",
+        "text": "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+        "url": "https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js",
+        "at": "2026-11-21T14:41:43.557Z"
+      }
+    ]
   },
   "meta": {
-    "node": "v26.12.1",
+    "node": "v26.13.1",
     "chrome": "Google Chrome for Testing 156.0.8078.4",
     "chromePath": "/home/sasnews/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell",
     "url": "http://<server>/index.html"

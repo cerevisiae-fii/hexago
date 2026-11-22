@@ -17,12 +17,12 @@ PC は交点をホバーしてクリック、スマホは同じ交点を2タッ�
 
 ## AI
 
-MCTS（モンテカルロ木探索）+ 面積利得評価（`hexago-mcts/3.2.0`）。設定画面で **AI 思考時間** と **AI 棋風（重み）** をそれぞれ切り替えられます：
+MCTS（モンテカルロ木探索）+ 面積利得評価（`hexago-mcts/2.1.0`）。設定画面で **AI 思考時間** と **AI 棋風（重み）** をそれぞれ切り替えられます：
 
 - **AI 思考時間**:
   - **高速**: 1手あたり 2.5〜6秒（9路2.5s / 13路3s / 19路4s / 25路6s）・最大4並列。軽快にテンポよく対局できます。
   - **長考**: 1手あたり 12〜15秒・最大8並列で深く読みます。
-- **AI 棋風（重み）**（一括切替＋各AI席ごとに個別変更可）:
+- **AI 棋風（重み）**（一括切替＋AIボタンを繰り返しタップで席ごとに個別変更可）:
   - **堅実**: 連結・守り・安全係数重視（無謀な侵入をさらに抑え、堅く地をまとめる）
   - **バランス**: 勝率・攻守の最適バランス
   - **攻撃的**: 切断・弱石攻め・リーダー圧迫・広めの探索重視
@@ -102,7 +102,7 @@ js/core/              theme / sound / geometry / state / rules
 js/ai/                engine.js(MCTS) / worker.js / pool.js / heuristic.js
 js/ui/                input / render / ui / modals / settings / online / debug
 js/photo/             写真復元（geom / features / model(.json) / rectify / detect / recognize / store / ui）
-dev/                  開発ツール（自己テスト・ブラウザE2E・写真学習パイプライン）
+dev/                  開発ツール（自己テスト・E2E）
 bench/                AI強さベンチマーク
 ```
 
@@ -119,30 +119,7 @@ node dev/sync-engine.js --check
 
 # 強さベンチ（例）
 node bench/bench.js --old-vs-random --games 2 --size 9
-
-# ブラウザ回帰テスト（依存ゼロCDP / Playwright不要）
-node dev/cdp/regress.js
-node dev/cdp/regress.js --out dev/cdp/current.json --compare dev/cdp/baseline.json
-
-# 写真パイプラインの精度テスト
-node dev/photo/test/run.js --case real
-node dev/photo/test/run.js --case detect,align,store,synthetic
-
-# 写真復元UIのブラウザE2E（スクリーンショットも撮る）
-node dev/photo/test/ui-e2e.js
 ```
-
-写真の学習パイプライン（Python / numpy + OpenCV）は `dev/photo/train/` にあります。合成データの生成、特徴量、学習、書き出し、評価、実写真パッチの評価までスクリプト化されています（決定的シードで再現可能）。
-
-```bash
-python dev/photo/train/gen_dataset.py      # 合成盤の生成（例）
-python dev/photo/train/build_cache.py      # 特徴量キャッシュの作成
-python dev/photo/train/train.py            # MLP 学習
-python dev/photo/train/export.py           # js/photo/model.json へ書き出し
-node dev/photo/train/parity_check.js       # Python/JS の特徴量一致検証
-```
-
-仕様と精度レポート: [`dev/photo/CONTRACT.md`](dev/photo/CONTRACT.md) / [`dev/photo/train/REPORT.md`](dev/photo/train/REPORT.md)
 
 ## 注意
 

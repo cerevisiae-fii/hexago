@@ -1,18 +1,8 @@
 // ===== プレイヤー設定 =====
 const SEAT_MODES = ['human', 'ai'];
 const SEAT_LABELS = { human: '人間', ai: 'AI' };
-const AI_STYLE_ORDER = ['solid', 'balanced', 'aggressive'];
+const AI_STYLE_CYCLE = [null, 'solid', 'balanced', 'aggressive'];
 const AI_STYLE_LABELS = { solid: '堅実', balanced: 'バランス', aggressive: '攻撃的' };
-function uniformAIStyle() {
-  let first = null;
-  for (let p = 1; p <= playerCount; p++) {
-    if (seats[p] !== 'ai') continue;
-    const st = typeof aiStyleForSeat === 'function' ? aiStyleForSeat(p) : currentAIStyle();
-    if (first === null) first = st;
-    else if (first !== st) return null; // 席ごとに異なるカスタム設定
-  }
-  return first !== null ? first : (typeof currentAIStyle === 'function' ? currentAIStyle() : 'balanced');
-}
 function canManageRoom() { return mode === 'local' || !roomCode || isHost; }
 function isMatchRunning() { return !!(G && G.phase !== 'setup' && !G.over); }
 function setSeatAIFlag(p) {
@@ -32,6 +22,7 @@ function setSeatMode(p, nextMode, quiet=false) {
   if (!canManageRoom() || p < 1 || p > 6 || !SEAT_MODES.includes(nextMode)) return;
   if (seats[p] === nextMode) return;
   if (nextMode === 'ai') releaseSeat(p);
+  if (typeof setSeatAIStyle === 'function') setSeatAIStyle(p, null);
   seats[p] = nextMode;
   setSeatAIFlag(p);
   if (!quiet) {
@@ -68,9 +59,9 @@ function syncSettings() {
     b.setAttribute('aria-pressed', String(active));
     b.disabled = !canManageRoom();
   });
-  const uniStyle = uniformAIStyle();
+  const bulkStyle = typeof currentAIStyle === 'function' ? currentAIStyle() : 'balanced';
   document.querySelectorAll('#aiStyleBtns .opt').forEach(b => {
-    const active = uniStyle !== null && b.dataset.aiStyle === uniStyle;
+    const active = b.dataset.aiStyle === bulkStyle;
     b.classList.toggle('on', active);
     b.setAttribute('aria-pressed', String(active));
     b.disabled = !canManageRoom();
@@ -85,31 +76,32 @@ function syncSettings() {
     const row = document.createElement('div'); row.className = 'flex items-center gap-1.5';
     const label = document.createElement('span'); label.className = 'w-16 shrink-0 text-xs font-bold text-neutral-700';
     label.textContent = `${p}P ${playerName(p)}`; row.appendChild(label);
+    const ovSt = typeof seatStyleOverride === 'function' ? seatStyleOverride(p) : null;
     for (const value of SEAT_MODES) {
       const b = document.createElement('button'); b.type = 'button';
       b.className = 'opt flex-1' + (seats[p] === value ? ' on' : '');
-      b.textContent = SEAT_LABELS[value];
+      if (value === 'ai') {
+        b.dataset.seatAi = String(p);
+        b.textContent = (seats[p] === 'ai' && ovSt) ? `AI（${AI_STYLE_LABELS[ovSt]}）` : SEAT_LABELS.ai;
+        b.title = 'AIを繰り返しタップで席ごとの棋風を切替';
+      } else {
+        b.textContent = SEAT_LABELS[value];
+      }
       b.disabled = !canManageRoom();
       if (seats[p] === value) b.setAttribute('aria-pressed', 'true');
-      b.onclick = () => setSeatMode(p, value);
-      row.appendChild(b);
-    }
-    if (seats[p] === 'ai') {
-      const curSt = typeof aiStyleForSeat === 'function' ? aiStyleForSeat(p) : 'balanced';
-      const sb = document.createElement('button'); sb.type = 'button';
-      sb.dataset.seatStyle = String(p);
-      sb.className = 'opt w-20 shrink-0 text-[11px]';
-      sb.textContent = AI_STYLE_LABELS[curSt] || 'バランス';
-      sb.title = 'タップで棋風を切替（堅実 / バランス / 攻撃的）';
-      sb.disabled = !canManageRoom();
-      sb.onclick = () => {
-        if (!canManageRoom()) return;
-        snd.click();
-        const nextSt = AI_STYLE_ORDER[(AI_STYLE_ORDER.indexOf(curSt) + 1) % AI_STYLE_ORDER.length];
-        if (typeof setSeatAIStyle === 'function') setSeatAIStyle(p, nextSt);
-        syncSettings(); save();
+      b.onclick = () => {
+        if (value === 'ai' && seats[p] === 'ai') {
+          if (!canManageRoom()) return;
+          snd.click();
+          const idx = AI_STYLE_CYCLE.indexOf(ovSt);
+          const nextSt = AI_STYLE_CYCLE[(idx + 1) % AI_STYLE_CYCLE.length];
+          if (typeof setSeatAIStyle === 'function') setSeatAIStyle(p, nextSt);
+          syncSettings(); save();
+          return;
+        }
+        setSeatMode(p, value);
       };
-      row.appendChild(sb);
+      row.appendChild(b);
     }
     $('seatBtns').appendChild(row);
   }

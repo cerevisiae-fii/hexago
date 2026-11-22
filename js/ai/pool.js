@@ -24,12 +24,15 @@ function currentAIMode() {
 function currentAIStyle() {
   return (typeof aiStyle === 'string' && (aiStyle === 'solid' || aiStyle === 'aggressive')) ? aiStyle : 'balanced';
 }
-function aiStyleForSeat(p) {
+function seatStyleOverride(p) {
   if (typeof seatStyles !== 'undefined' && Array.isArray(seatStyles) && p >= 1 && p <= 6) {
     const v = seatStyles[p];
     if (v === 'solid' || v === 'balanced' || v === 'aggressive') return v;
   }
-  return currentAIStyle();
+  return null;
+}
+function aiStyleForSeat(p) {
+  return seatStyleOverride(p) || currentAIStyle();
 }
 function setAIMode(nextMode) {
   const m = (nextMode === 'deep' || nextMode === 'beta') ? 'deep' : 'fast';
@@ -46,12 +49,12 @@ function setAIStyle(nextStyle) {
   const s = (nextStyle === 'solid' || nextStyle === 'aggressive') ? nextStyle : 'balanced';
   aiStyle = s;
   if (typeof seatStyles !== 'undefined' && Array.isArray(seatStyles)) {
-    for (let p = 1; p <= 6; p++) seatStyles[p] = s;
+    for (let p = 1; p <= 6; p++) seatStyles[p] = null;
   }
   return s;
 }
 function setSeatAIStyle(p, nextStyle) {
-  const s = (nextStyle === 'solid' || nextStyle === 'aggressive') ? nextStyle : 'balanced';
+  const s = (nextStyle === 'solid' || nextStyle === 'balanced' || nextStyle === 'aggressive') ? nextStyle : null;
   if (typeof seatStyles !== 'undefined' && Array.isArray(seatStyles) && p >= 1 && p <= 6) {
     seatStyles[p] = s;
   }

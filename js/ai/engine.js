@@ -23,7 +23,7 @@
 (function (globalScope) {
   'use strict';
 
-  var VERSION = 'hexago-mcts/3.0.0';
+  var VERSION = 'hexago-mcts/3.1.0';
 
   /* ------------------------------------------------------------------ *
    *  Utilities
@@ -257,6 +257,28 @@
     var mvUseful = new Uint8Array(n);                // 1 = changes score / stabilizes (search candidate)
     var mvSave = new Int16Array(n);                   // own atari groups rescued by the move
     var mvStab = new Uint8Array(n);                   // 1 = adjacent own group has <= 2 liberties
+    var mvHopeless = new Uint8Array(n);               // 1 = provably hopeless (own eye / smart-dead / living-enemy dead invasion / settled own fill)
+    var mvDiesImm = new Uint8Array(n);                // 1 = newly placed stone removed immediately by detectDeadStonesSmart
+    var mvEnemyDrop = new Int16Array(n);              // max opponent score drop caused by move under smart scoring
+    var cleanBoard = new Int8Array(n);                // srcBoard after smart dead-stone removal
+    var cRegId = new Int32Array(n);                   // empty region id on cleanBoard (-1 for live stone)
+    var cRegSize = new Int16Array(n + 8);
+    var cRegMask = new Int8Array(n + 8);
+    var cRegColCnt = new Int8Array(n + 8);
+    var cRegWide = new Int16Array(n + 8);             // points in region with >= 3 empty neighbours (2D interior room)
+    var cRegBorderAllAlive = new Uint8Array(n + 8);   // 1 = every bordering stone has >= 2 eyes independent of this region
+    var cRegBorderHas1Eye = new Uint8Array(n + 8);    // 1 = every bordering stone has >= 1 eye independent of this region
+    var cRegTrappedFor = new Int8Array(n + 8);        // colour trapped inside a 2-eye enemy pocket too small to live
+    var cRegCount = 0;
+    var cleanGid = new Int32Array(n);
+    var cleanLibs = new Int16Array(n);
+    var cleanEyes = new Int8Array(n);
+    var cleanOwnRegs = new Int8Array(n);
+    var cleanGSize = new Int16Array(n);
+    var cleanRegSeen = new Int32Array(n + 8), cleanRegSeenId = 0;
+    var cleanDameExists = false;
+    var LIVE_MIN_2EYE = n <= 80 ? 11 : 15;            // min empty space to realistically live inside a 2-eye enemy wall
+    var LIVE_MIN_TINY = n <= 80 ? 9 : 11;             // min empty space inside solid enemy wall without weak enemy groups
     var rootPriorW = new Float64Array(n);             // virtual prior win-sum per root move
     var rootPriorN = new Float64Array(n);             // virtual prior visit count per root move
     var ownNear = new Int16Array(n);                  // hex distance to nearest own stone at root
@@ -410,24 +432,176 @@
       }
     }
 
-    // S0 baseline: the area score each player gets if everyone passes right now
-    // (conservative dead-stone removal, exactly like the page's scoring).
+    // S0 baseline & region/life-and-death analysis on srcBoard + smart-dead map.
+    // IMPORTANT: region ownership and group eye counts are analysed on srcBoard
+    // (NOT after erasing unfinished <2-eye groups!), so a player's own 0/1-eye
+    // group is never erased and always keeps full freedom to make two eyes.
+    // `cleanBoard` is used strictly to identify stones already dead under the
+    // page's detectDeadStonesSmart scorer.
     function computeBaseline(pc) {
-      gainBoard.set(srcBoard);
-      removeDeadStonesSmart(gainBoard, pc);
-      scoreBoardInto(gainBoard, baseSc, pc);
+      cleanBoard.set(srcBoard);
+      if (stoneCountRoot >= 4) removeDeadStonesSmartImpl(cleanBoard, pc);
+      scoreBoardInto(cleanBoard, baseSc, pc);
+      analyzeRootRegions(pc);
     }
 
-    // Static score gain of playing `mv`: place, clean dead stones, score,
-    // and subtract the pass-now baseline. Own-territory fills are 0, dame +1,
-    // captures count exactly, dead invasions die in the cleanup.
+    // Analyse empty regions and live/2-eye groups on srcBoard, plus cross-check
+    // against cleanBoard for already-smart-dead stones inside 2-eye territories.
+    function analyzeRootRegions(pc) {
+      var i, j, je, t, v, k, s, qn, mask, cnt, wide, empNb, rid = 0;
+      cleanDameExists = false;
+      for (i = 0; i < n; i++) { cRegId[i] = -1; cleanGid[i] = 0; }
+      for (i = 0; i < n; i++) {
+        if (srcBoard[i] !== 0 || cRegId[i] >= 0) continue;
+        qn = 0; terrQueue[qn++] = i; cRegId[i] = rid;
+        mask = 0; wide = 0;
+        for (k = 0; k < qn; k++) {
+          s = terrQueue[k]; empNb = 0;
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            t = nbFlat[j]; v = srcBoard[t];
+            if (v === 0) {
+              empNb++;
+              if (cRegId[t] < 0) { cRegId[t] = rid; terrQueue[qn++] = t; }
+            } else {
+              mask |= (1 << v);
+            }
+          }
+          if (empNb >= 3) wide++;
+        }
+        cnt = pop6(mask);
+        if (cnt >= 2) cleanDameExists = true;
+        cRegSize[rid] = qn;
+        cRegMask[rid] = mask;
+        cRegColCnt[rid] = cnt;
+        cRegWide[rid] = wide;
+        cRegBorderAllAlive[rid] = mask !== 0 ? 1 : 0;
+        cRegBorderHas1Eye[rid] = mask !== 0 ? 1 : 0;
+        cRegTrappedFor[rid] = 0;
+        rid++;
+      }
+      cRegCount = rid;
+
+      // Scan all groups on srcBoard: liberties, single-point eyes, distinct own-only regions
+      for (i = 0; i < n; i++) {
+        var c = srcBoard[i];
+        if (c === 0 || cleanGid[i] !== 0) continue;
+        var libs = scanGroupFull(srcBoard, i, c);
+        var gi = grpN;
+        var gid = ++dsGroupId;
+        for (k = 0; k < gi; k++) { cleanGid[grpBuf[k]] = gid; dsGMark[grpBuf[k]] = gid; }
+        var eyes = groupEyeCount(srcBoard, c, gid);
+        var sid = ++cleanRegSeenId, ownRegs = 0;
+        for (k = 0; k < gi; k++) {
+          s = grpBuf[k];
+          for (j = nbOff[s], je = nbOff[s + 1]; j < je; j++) {
+            t = nbFlat[j];
+            if (srcBoard[t] !== 0) continue;
+            var r2 = cRegId[t];
+            if (r2 >= 0 && cRegColCnt[r2] === 1 && (cRegMask[r2] & (1 << c)) && cleanRegSeen[r2] !== sid) {
+              cleanRegSeen[r2] = sid;
+              ownRegs++;
+            }
+          }
+        }
+        for (k = 0; k < gi; k++) {
+          var st2 = grpBuf[k];
+          cleanLibs[st2] = libs; cleanEyes[st2] = eyes;
+          cleanOwnRegs[st2] = ownRegs; cleanGSize[st2] = gi;
+        }
+      }
+
+      // Check per-region whether every bordering group on srcBoard is already
+      // 2-eye alive (or already has >= 1 eye) independent of this region.
+      for (i = 0; i < n; i++) {
+        var r0 = cRegId[i];
+        if (r0 < 0 || (!cRegBorderAllAlive[r0] && !cRegBorderHas1Eye[r0])) continue;
+        for (j = nbOff[i], je = nbOff[i + 1]; j < je; j++) {
+          t = nbFlat[j];
+          var tc = srcBoard[t];
+          if (tc === 0) continue;
+          var selfOnly = (cRegColCnt[r0] === 1 && (cRegMask[r0] & (1 << tc)));
+          var otherOwn = cleanOwnRegs[t] - (selfOnly ? 1 : 0);
+          var otherEyes = cleanEyes[t] - (selfOnly && cRegSize[r0] === 1 ? 1 : 0);
+          if (otherOwn < 2 && otherEyes < 2) cRegBorderAllAlive[r0] = 0;
+          if (otherOwn < 1 && otherEyes < 1) cRegBorderHas1Eye[r0] = 0;
+        }
+      }
+
+      // Detect trapped 0-eye stones sitting inside a 2-eye living enemy pocket
+      // (2-colour region on srcBoard where wallC is 2-eye alive independent of
+      // the pocket and every trapC group touching the pocket has 0 eyes, touches
+      // ONLY this pocket, and total stones + empty space is too small/narrow to
+      // make 2 eyes — OR all trapC stones are already smart-dead on cleanBoard).
+      for (var rIdx = 0; rIdx < cRegCount; rIdx++) {
+        if (cRegColCnt[rIdx] !== 2) continue;
+        var m = cRegMask[rIdx], c1 = 0, c2 = 0;
+        for (var cp = 1; cp <= pc; cp++) {
+          if (m & (1 << cp)) { if (c1 === 0) c1 = cp; else c2 = cp; }
+        }
+        if (!c1 || !c2) continue;
+        for (var passIdx = 0; passIdx < 2; passIdx++) {
+          var trapC = passIdx === 0 ? c1 : c2;
+          var wallC = passIdx === 0 ? c2 : c1;
+          var wallAlive = true, trapOk = true, trapAllSmartDead = true, trapStones = 0;
+          var seenG = ++cleanRegSeenId;
+          for (i = 0; i < n && wallAlive && trapOk; i++) {
+            if (cRegId[i] !== rIdx) continue;
+            for (j = nbOff[i], je = nbOff[i + 1]; j < je; j++) {
+              t = nbFlat[j]; var colT = srcBoard[t];
+              if (colT === 0) continue;
+              if (colT === wallC) {
+                if (cleanOwnRegs[t] < 2 && cleanEyes[t] < 2) { wallAlive = false; break; }
+              } else if (colT === trapC) {
+                if (cleanBoard[t] !== 0) trapAllSmartDead = false;
+                if (cleanEyes[t] > 0 || cleanOwnRegs[t] > 0) { trapOk = false; break; }
+                var gidT = cleanGid[t];
+                if (cleanRegSeen[t] !== seenG) {
+                  var allInR = true;
+                  for (var q2 = 0; q2 < n; q2++) {
+                    if (cleanGid[q2] !== gidT) continue;
+                    cleanRegSeen[q2] = seenG;
+                    if (cleanBoard[q2] !== 0) trapAllSmartDead = false;
+                    trapStones++;
+                    for (var j2 = nbOff[q2], je2 = nbOff[q2 + 1]; j2 < je2; j2++) {
+                      var u2 = nbFlat[j2];
+                      if (srcBoard[u2] === 0 && cRegId[u2] !== rIdx) { allInR = false; break; }
+                    }
+                  }
+                  if (!allInR && !trapAllSmartDead) { trapOk = false; break; }
+                }
+              }
+            }
+          }
+          if (wallAlive && trapOk && trapStones > 0 && (trapAllSmartDead || trapStones + cRegSize[rIdx] < LIVE_MIN_2EYE || cRegWide[rIdx] < 3)) {
+            // Positive value = trapC is trapped (invader cannot live);
+            // encode +trapC if NOT all smart-dead yet, or -(trapC) if ALREADY smart-dead
+            // (so wallC also knows it doesn't need to waste moves killing already-dead stones!)
+            cRegTrappedFor[rIdx] = trapAllSmartDead ? -trapC : trapC;
+            break;
+          }
+        }
+      }
+    }
+
+    // Static score gain of playing `mv` under the REAL page scorer
+    // (detectDeadStonesSmart): place, clean dead stones, score, and compare
+    // against S0. Also records whether the newly placed stone dies immediately
+    // (`mvDiesImm`) and whether any opponent loses score (`mvEnemyDrop`).
     function staticGainFor(mv, p, pc) {
       gainBoard.set(srcBoard);
       capCount = 0;
-      if (!applyMove(gainBoard, mv, p)) { capCount = 0; return -32768; }
+      if (!applyMove(gainBoard, mv, p)) { capCount = 0; mvDiesImm[mv] = 1; mvEnemyDrop[mv] = 0; return -32768; }
       capCount = 0;
-      removeDeadStonesSmart(gainBoard, pc);
+      if (stoneCountRoot >= 4) removeDeadStonesSmartImpl(gainBoard, pc);
       scoreBoardInto(gainBoard, gainSc, pc);
+      mvDiesImm[mv] = gainBoard[mv] === 0 ? 1 : 0;
+      var maxDrop = 0;
+      for (var e = 1; e <= pc; e++) {
+        if (e === p || outFlags[e]) continue;
+        var dr = baseSc[e] - gainSc[e];
+        if (dr > maxDrop) maxDrop = dr;
+      }
+      mvEnemyDrop[mv] = maxDrop;
       return gainSc[p] - baseSc[p];
     }
 
@@ -482,6 +656,7 @@
       for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
         s = nbFlat[j]; c = srcBoard[s];
         if (c === 0 || c === turn) continue;
+        if (cleanBoard[s] === 0) continue; // already dead under detectDeadStonesSmart: no bonus for poking dead stones
         if (atkLibs[s] > 3 || atkEyes[s] >= 2) continue;
         var dup = false;
         for (var j2 = nbOff[mv]; j2 < j; j2++) {
@@ -576,36 +751,101 @@
           if (useful) noUsefulRoot = false;
           continue;
         }
-        // ---- v2.1 gain policy ----
-        // is the move inside a region bordered by exactly one enemy colour
-        // (their solid territory)?  Only those are "dead invasion" risks;
-        // a contested (2+-colour) region is normal play/dame for anyone.
-        inv = terrColorCount[mv] === 1 && !(terrColMask[mv] & (1 << turn));
-        // does it touch an enemy group with <= 3 liberties? (kill / capture race / ko threat material)
+        // ---- v3.1 smart-scorer gain & dead-invasion eradication policy ----
+        var rid = cRegId[mv];
+        var cMask = rid >= 0 ? cRegMask[rid] : 0;
+        var cCnt = rid >= 0 ? cRegColCnt[rid] : 0;
+        var cSize = rid >= 0 ? cRegSize[rid] : 0;
+        var cWide = rid >= 0 ? cRegWide[rid] : 0;
+        var cAlive = rid >= 0 ? cRegBorderAllAlive[rid] : 0;
+        var cHas1Eye = rid >= 0 ? cRegBorderHas1Eye[rid] : 0;
+        var cTrap = rid >= 0 ? cRegTrappedFor[rid] : 0;
+        var hasAnyEnemy = false;
+        for (var pe = 1; pe <= pcCur; pe++) if (pe !== turn && baseSc[pe] > 0) { hasAnyEnemy = true; break; }
+        if (!hasAnyEnemy) {
+          for (var bi0 = 0; bi0 < n; bi0++) if (srcBoard[bi0] !== 0 && srcBoard[bi0] !== turn) { hasAnyEnemy = true; break; }
+        }
+        // Enemy-only region on srcBoard
+        inv = cCnt === 1 && !(cMask & (1 << turn));
+        var anyEnemyOnly = rid >= 0 && cMask !== 0 && !(cMask & (1 << turn));
+        var ownSrcOnly = rid >= 0 && cCnt === 1 && (cMask & (1 << turn));
+        // Does it touch a LIVE weak enemy group (ignoring already-smart-dead stones)?
         nearWeakEn = 0;
         for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
           var s = nbFlat[j];
-          if (srcBoard[s] !== 0 && srcBoard[s] !== turn && atkLibs[s] <= 3) { nearWeakEn = 1; break; }
+          if (cleanBoard[s] !== 0 && cleanBoard[s] !== turn && cleanLibs[s] <= 3 && cleanEyes[s] < 2 && cleanOwnRegs[s] < 2) {
+            nearWeakEn = 1; break;
+          }
         }
-        viable = 0;
-        if (!inv || rootCap[mv] > 0 || nearWeakEn) viable = 1;
-        else if (terrSize[mv] >= V_DEEP && libs >= 3) viable = 1;              // huge region: real deep invasion
-        else if (terrSize[mv] >= V_MIN && libs >= 3) {
-          nd = nearestOwnWithin(srcBoard, mv, turn, 3);
-          if (nd <= 3) viable = 1;                                             // supported reduction/invasion
-          else if (libs >= 4 && nearestOwnWithin(srcBoard, mv, turn, 4) <= 4) viable = 1;
-        }
-        if (terrSize[mv] < V_MIN && !nearWeakEn) viable = 0;                   // no two eyes possible: dead stone
-        mvViable[mv] = viable;
+        // Does it rescue/stabilize an own group on srcBoard?
+        var saveOwn = mvSave[mv] > 0;
+        var stabOwn = mvStab[mv] > 0;
+        // Compute exact smart-scorer static gain, immediate death, and enemy drop
         g = staticGainFor(mv, turn, pcCur);
-        if (inv && !viable) g = 0;                                             // 100%-dead invasion: exactly worthless
+        var diesImm = mvDiesImm[mv];
+        var enDrop = mvEnemyDrop[mv];
+
+        // Hopeless-move classification (unconditionally excluded from root
+        // candidates and 8-worker rootMoves so deep searches NEVER dump dead
+        // stones into 2-eye enemy territories or waste moves on dead stones,
+        // while NEVER blocking eye-making for unfinished own groups or attacks
+        // against <2-eye enemy walls).
+        var hopeless = 0;
+        if (eye && rootCap[mv] === 0) {
+          // Rule 1: pure own eye — NEVER fill
+          hopeless = 1;
+        } else if (diesImm && ownN === 0 && rootCap[mv] === 0 && g <= 0 && enDrop <= 0 && !nearWeakEn) {
+          // Rule 2: lone stone dropped into enclosed space that detectDeadStonesSmart
+          // immediately removes with <= 0 score effect (never blocks connecting/eye-making)
+          hopeless = 1;
+        } else if (inv && cAlive && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
+          // Rule 3: single-enemy territory whose surrounding wall ALREADY has 2 eyes!
+          // Cannot kill the 2-eye wall, so invasion only makes sense if the pocket
+          // has enough 2D space to make 2 eyes inside (do NOT trust pass-now gain).
+          if (cSize < LIVE_MIN_2EYE || cWide < 3 || libs < 3) hopeless = 1;
+        } else if (inv && cHas1Eye && cSize >= 4 && cSize < LIVE_MIN_TINY && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
+          // Rule 3a: surrounding enemy already has 1 eye outside + a 4..10pt pocket
+          // (trivially keeps a 2nd eye inside while killing a lone invader).
+          hopeless = 1;
+        } else if (anyEnemyOnly && !inv && cAlive && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
+          // Rule 3b: multi-enemy pocket whose bordering walls ALL have 2 eyes
+          if (cSize < LIVE_MIN_TINY || cWide < 2 || libs < 3) hopeless = 1;
+        } else if (cTrap !== 0 && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
+          // Rule 4: trapped 0-eye stones inside a 2-eye living enemy pocket:
+          // - If turn === Math.abs(cTrap): turn is the trapped invader -> never pile more dead stones!
+          // - If cTrap < 0 (already smart-dead on cleanBoard) and turn !== -cTrap:
+          //   turn is the 2-eye defender -> no need to waste moves killing already-dead stones!
+          if (turn === Math.abs(cTrap)) hopeless = 1;
+          else if (cTrap < 0 && g <= 0 && enDrop <= 0) hopeless = 1;
+        } else if (ownSrcOnly && rootCap[mv] === 0 && g <= 0 && enDrop <= 0 && !saveOwn && !stabOwn) {
+          // Rule 5: own settled territory — ONLY forbid when our bordering wall
+          // already has 2 eyes (or no enemies exist on the board, or pocket <= 2 pts
+          // where filling cannot create 2 eyes). Never blocks a <2-eye group from
+          // splitting a 4..10pt space into 2 eyes!
+          if (!hasAnyEnemy && cSize < LIVE_MIN_TINY) hopeless = 1;
+          else if (cAlive && (cSize < LIVE_MIN_2EYE || cWide < 2)) hopeless = 1;
+          else if (cSize <= 2) hopeless = 1;
+        }
+
+        mvHopeless[mv] = hopeless;
+        viable = hopeless ? 0 : 1;
+        mvViable[mv] = viable;
+        if (hopeless) g = 0;
         ownGain[mv] = g;
-        useful = g > 0 || (rootCap[mv] > 0 && viable) || (mvSave[mv] > 0 && libs >= 2) || (mvStab[mv] && libs >= 2 && nearWeakEn);
-        if (eye && rootCap[mv] === 0) useful = false;                          // never fill our own eye
-        if (libs === 1 && rootCap[mv] === 0) useful = false;                   // self-atari
-        if (terrColorCount[mv] === 1 && (terrColMask[mv] & (1 << turn)) && g <= 0 && rootCap[mv] === 0 && mvSave[mv] === 0 && !mvStab[mv]) useful = false; // own settled territory, any size
+        // Useful: anything non-hopeless that can move the score, fight, save, or make eyes
+        useful = !hopeless && (
+          g > 0 || enDrop > 0 || rootCap[mv] > 0 ||
+          (saveOwn && libs >= 2) ||
+          (stabOwn && libs >= 2) ||
+          (cCnt >= 2 && libs >= 2) ||
+          (!ownSrcOnly && !anyEnemyOnly && libs >= 2) ||
+          (ownSrcOnly && !cAlive && hasAnyEnemy && cSize >= 3 && libs >= 2) ||
+          (inv && !cAlive && libs >= 2)
+        );
+        if (eye && rootCap[mv] === 0) useful = false;
+        if (libs === 1 && rootCap[mv] === 0) useful = false;
         mvUseful[mv] = useful ? 1 : 0;
-        atkB[mv] = ATK_ORDER ? atkBonusAt(mv, turn) : 0;
+        atkB[mv] = (ATK_ORDER && !hopeless) ? atkBonusAt(mv, turn) : 0;
         if (useful) noUsefulRoot = false;
       }
       if (GAIN_POLICY) computeEnemyThreat(turn, pcCur, ownWeak);
@@ -613,24 +853,38 @@
     }
 
     // Can any active opponent still change the score? (blocks the pass gate)
-    // (a) dame / mixed regions exist, (b) one of our single-colour regions is
-    // invadable at a supported (or deep-huge) point, (c) we have a capturable
-    // weak group. When none of these hold, the position is frozen for everyone.
     function computeEnemyThreat(turn, pc, ownWeak) {
-      enemyThreat = ownWeak || dameExists;
+      // Check if we have any <2-eye weak group when opponents exist
+      var liveOwnWeak = false, hasLiveEnemy = false, i;
+      for (i = 0; i < n; i++) if (srcBoard[i] !== 0 && srcBoard[i] !== turn) { hasLiveEnemy = true; break; }
+      if (hasLiveEnemy) {
+        for (i = 0; i < n; i++) {
+          if (srcBoard[i] === turn && cleanLibs[i] <= 2 && cleanEyes[i] < 2 && cleanOwnRegs[i] < 2 && cleanBoard[i] === turn) {
+            liveOwnWeak = true; break;
+          }
+        }
+      }
+      // Real dame: 2+-colour region on srcBoard that is NOT a trapped-in-2-eye-pocket dead region
+      var realDame = false;
+      for (var rIdx = 0; rIdx < cRegCount; rIdx++) {
+        if (cRegColCnt[rIdx] >= 2 && cRegTrappedFor[rIdx] === 0) { realDame = true; break; }
+      }
+      enemyThreat = liveOwnWeak || realDame;
       if (enemyThreat) return;
-      var e, i, j, je, libs;
+      var e, j, je, libs;
       for (e = 1; e <= pc && !enemyThreat; e++) {
         if (e === turn || outFlags[e]) continue;
         fillColorNear(srcBoard, e, 4);
         for (i = 0; i < n; i++) {
           if (srcBoard[i] !== 0) continue;
-          if (terrColorCount[i] !== 1 || !(terrColMask[i] & (1 << turn))) continue; // only our regions
-          if (terrSize[i] < V_MIN) continue;                                        // too small to live in
+          var r0 = cRegId[i];
+          if (r0 < 0 || cRegColCnt[r0] !== 1 || !(cRegMask[r0] & (1 << turn))) continue;
+          var minSz = cRegBorderAllAlive[r0] ? LIVE_MIN_2EYE : LIVE_MIN_TINY;
+          if (cRegSize[r0] < minSz || cRegWide[r0] < (cRegBorderAllAlive[r0] ? 3 : 2)) continue;
           libs = 0;
           for (j = nbOff[i], je = nbOff[i + 1]; j < je; j++) if (srcBoard[nbFlat[j]] === 0) libs++;
           if (libs < 3) continue;
-          if (enemyNear[i] <= 3 || (terrSize[i] >= V_DEEP && libs >= 4)) { enemyThreat = true; break; }
+          if (enemyNear[i] <= 3 || (cRegSize[r0] >= V_DEEP && libs >= 4)) { enemyThreat = true; break; }
         }
       }
     }
@@ -1843,33 +2097,38 @@
       var passGate = GAIN_POLICY ? (noUsefulRoot && !enemyThreat) : noUsefulRoot;
       var allowPass = passEnds || passGate || legal.length <= 1;
 
-      // Root search candidates: exclude pure non-capture own eyes unconditionally
-      // so neither single-worker search nor multi-worker rootMoves merging can
-      // ever waste visits on or select an own eye fill.
+      // Root search candidates: exclude ALL provably hopeless moves (own eyes,
+      // immediately smart-dead placements, dead invasions into living enemy
+      // pockets, trapped dead-stone piling, and useless fills inside safe own
+      // territory) unconditionally so neither 1 worker nor 8-worker pool merges
+      // can ever select them at any time budget.
       var candMoves = [];
       if (GAIN_POLICY && RESTRICT_CAND) {
         for (i = 0; i < legal.length; i++) {
-          if (legal[i] >= 0 && mvUseful[legal[i]]) candMoves.push(legal[i]);
+          if (legal[i] >= 0 && mvUseful[legal[i]] && !mvHopeless[legal[i]]) candMoves.push(legal[i]);
         }
         if (candMoves.length === 0) {
           for (i = 0; i < legal.length; i++) {
             var fm = legal[i];
-            if (fm < 0) continue;
-            if (ownEyeAt(srcBoard, fm, turn) && rootCap[fm] === 0) continue;
+            if (fm < 0 || mvHopeless[fm]) continue;
             if (rootLibs[fm] === 1 && rootCap[fm] === 0) continue;
-            if (terrColorCount[fm] > 0 && !(terrColMask[fm] & (1 << turn)) && !mvViable[fm]) continue;
             candMoves.push(fm);
           }
         }
       } else {
         for (i = 0; i < legal.length; i++) {
           var lm0 = legal[i];
+          if (lm0 >= 0 && GAIN_POLICY && mvHopeless[lm0]) continue;
           if (lm0 >= 0 && rootCap[lm0] === 0 && ownEyeAt(srcBoard, lm0, turn)) continue;
           candMoves.push(lm0);
         }
       }
+      var hasBoardCand = false;
       var candMark = new Uint8Array(n);
-      for (i = 0; i < candMoves.length; i++) if (candMoves[i] >= 0) candMark[candMoves[i]] = 1;
+      for (i = 0; i < candMoves.length; i++) if (candMoves[i] >= 0) { candMark[candMoves[i]] = 1; hasBoardCand = true; }
+      // If EVERY legal board placement is hopeless (only eyes, settled small own
+      // territory, or dead invasions remain), passing immediately is exact.
+      if (GAIN_POLICY && !hasBoardCand) { passGate = true; allowPass = true; }
       if (allowPass && candMoves[candMoves.length - 1] !== -1) candMoves.push(-1);
 
       // The position is frozen for everyone: passing is the correct decision
@@ -1877,7 +2136,7 @@
       if (passGate) {
         simBoard.set(srcBoard);
         capCount = 0;
-        removeDeadStonesSmart(simBoard, pc);
+        removeDeadStonesSmartImpl(simBoard, pc);
         scoreBoardInto(simBoard, outSc, pc);
         computeOutcome();
         var passVal = winArr[rootMover], passScore = valArr[rootMover];

@@ -49,7 +49,13 @@ function syncSettings() {
   const participantView = mode === 'online' && boardView === 'participant';
   $('onlineRoleConfig').classList.toggle('hidden', mode !== 'online');
   $('seatBox').classList.toggle('hidden', participantView);
-  ['boardSizeConfig', 'playerCountConfig', 'soundConfig'].forEach(id => $(id).classList.toggle('hidden', participantView));
+  ['boardSizeConfig', 'playerCountConfig', 'aiModeConfig', 'soundConfig'].forEach(id => $(id).classList.toggle('hidden', participantView));
+  document.querySelectorAll('#aiModeBtns .opt').forEach(b => {
+    const active = b.dataset.aiMode === (typeof currentAIMode === 'function' ? currentAIMode() : 'fast');
+    b.classList.toggle('on', active);
+    b.setAttribute('aria-pressed', String(active));
+    b.disabled = !canManageRoom();
+  });
   $('btnNew').classList.toggle('hidden', participantView);
   $('hostRoomSection').classList.toggle('hidden', participantView);
   $('joinRoomSection').classList.toggle('hidden', !participantView);
@@ -97,6 +103,12 @@ document.querySelectorAll('#modeBtns .opt').forEach(b => b.onclick = () => {
   mode = b.dataset.v; syncSettings(); updateUI();
 });
 document.querySelectorAll('[data-bulk]').forEach(b => b.onclick = () => setAllSeatModes(b.dataset.bulk));
+document.querySelectorAll('#aiModeBtns .opt').forEach(b => b.onclick = () => {
+  if (!canManageRoom()) return;
+  snd.click();
+  if (typeof setAIMode === 'function') setAIMode(b.dataset.aiMode);
+  syncSettings(); save();
+});
 $('btnHostBoard').onclick = () => { boardView = 'host'; syncSettings(); };
 $('btnParticipantBoard').onclick = () => { boardView = 'participant'; syncSettings(); };
 $('btnSound').onclick = () => { snd.on = !snd.on; syncSettings(); snd.click(); save(); };

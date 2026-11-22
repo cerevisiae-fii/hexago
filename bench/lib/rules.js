@@ -298,6 +298,114 @@ function createRules(size) {
     return Array.from(new Set(dead));
   }
 
+  /** Page `regionInfo(b)`: per-point empty-region id + regions (cols, size). */
+  function regionInfoOf(board) {
+    const id = new Array(n).fill(-1);
+    const regs = [];
+    for (let i = 0; i < n; i++) {
+      if (board[i] || id[i] >= 0) continue;
+      const reg = [i];
+      const cols = new Set();
+      id[i] = regs.length;
+      for (let k = 0; k < reg.length; k++) {
+        const nbs = NB[reg[k]];
+        for (let j = 0; j < nbs.length; j++) {
+          const nb = nbs[j];
+          if (!board[nb]) { if (id[nb] < 0) { id[nb] = regs.length; reg.push(nb); } }
+          else cols.add(board[nb]);
+        }
+      }
+      regs.push({ points: reg, size: reg.length, cols: cols });
+    }
+    return { id: id, regs: regs };
+  }
+
+  /** Page `playStoneOnBoard`: place, remove 0-liberty adjacent enemy groups, suicide -> null. */
+  function playStoneOnBoardB(board, i, p) {
+    if (board[i]) return null;
+    const a = board.slice();
+    a[i] = p;
+    const cap = [], done = new Set();
+    for (const nb of NB[i]) {
+      if (a[nb] && a[nb] !== p && !done.has(nb)) {
+        const g = groupOf(a, nb);
+        g.forEach(function (x) { done.add(x); });
+        if (!libCount(a, g)) cap.push.apply(cap, g);
+      }
+    }
+    cap.forEach(function (x) { a[x] = 0; });
+    if (!libCount(a, groupOf(a, i))) return null; // 自殺
+    return a;
+  }
+
+  /** Page `canEnemyCaptureGroup`: alternating enemy fills until captured / unfillable. */
+  function canEnemyCaptureGroupB(board, group0, color, pc) {
+    let b = board.slice();
+    let grp = group0.slice();
+    if (!grp.length || !b[grp[0]]) return false;
+    for (let step = 0; step < 64; step++) {
+      const libs = new Set();
+      for (const s of grp) for (const nb of NB[s]) if (!b[nb]) libs.add(nb);
+      if (libs.size === 0) return true; // 取れた
+      let moved = false;
+      const enemyColors = [];
+      for (let c = 1; c <= pc; c++) if (c !== color) enemyColors.push(c);
+      for (const l of libs) {
+        const colors = [];
+        for (const nb of NB[l]) if (b[nb] && b[nb] !== color && colors.indexOf(b[nb]) < 0) colors.push(b[nb]);
+        for (const c of enemyColors) if (colors.indexOf(c) < 0) colors.push(c);
+        for (const enemy of colors) {
+          const res = playStoneOnBoardB(b, l, enemy);
+          if (!res) continue;
+          b = res;
+          if (!b[grp[0]]) return true;
+          grp = groupOf(b, grp[0]);
+          moved = true;
+          break;
+        }
+        if (moved) break;
+      }
+      if (!moved) return false;
+    }
+    return false;
+  }
+
+  /**
+   * Page `detectDeadStonesSmart()`: the actual automatic dead-stone list used
+   * by the page at pass end (doPass -> finishScore).  Groups without two eyes
+   * whose liberties all lie in small enemy-bordering regions get the local
+   * alternating capture search.
+   */
+  function detectDeadStonesSmart(state) {
+    const b = state.board;
+    const pc = state.playerCount || 2;
+    const seen = new Set(), dead = [];
+    const info = regionInfoOf(b);
+    for (let i = 0; i < b.length; i++) {
+      if (!b[i] || seen.has(i)) continue;
+      const color = b[i];
+      const g = groupOf(b, i);
+      g.forEach(function (x) { seen.add(x); });
+      if (!libCount(b, g)) continue;
+      if (countEyes(b, g, color) >= 2) continue;      // 二眼は無条件で生き
+      const libs = new Set();
+      for (const x of g) for (const nb of NB[x]) if (!b[nb]) libs.add(nb);
+      let enclosed = libs.size > 0;
+      const regionIds = new Set();
+      for (const l of libs) regionIds.add(info.id[l]);
+      for (const rid of regionIds) {
+        const reg = info.regs[rid];
+        if (!reg) { enclosed = false; break; }
+        const hasEnemy = Array.from(reg.cols).some(function (c) { return c !== color; });
+        if (!hasEnemy) { enclosed = false; break; }
+        if (reg.size > Math.max(6, g.length * 2 + 2)) { enclosed = false; break; }
+      }
+      if (!enclosed) continue;
+      if (canEnemyCaptureGroupB(b, g, color, pc)) dead.push.apply(dead, g);
+    }
+    return Array.from(new Set(dead));
+  }
+
   /**
    * Area score (page `finishScore` core). removeDead=true applies `state.dead`
    * first (page behaviour at pass end). Returns score, territory, stones and
@@ -339,7 +447,7 @@ function createRules(size) {
 
   /** Page pass end: detect dead stones, remove them, score, end the game. */
   function finishByPass(state) {
-    state.dead = detectDeadStones(state);
+    state.dead = detectDeadStonesSmart(state);
     const summary = scoreState(state, { removeDead: true });
     state.over = true;
     state.phase = 'ended';
@@ -364,6 +472,8 @@ function createRules(size) {
     territoryOf: territoryOf,
     countEyes: countEyes,
     detectDeadStones: detectDeadStones,
+    regionInfoOf: regionInfoOf,
+    detectDeadStonesSmart: detectDeadStonesSmart,
     scoreState: scoreState,
     finishByPass: finishByPass,
   };

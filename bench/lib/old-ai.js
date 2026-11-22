@@ -26,19 +26,22 @@ const path = require('path');
 const vm = require('vm');
 const rules = require('./rules');
 
+const { readPageSource } = require('../../dev/page-source');
+// リファクタ後は実装が複数ファイルに分かれているため、既定では連結ソースを読む。
 const DEFAULT_PAGE = path.join(__dirname, '..', '..', 'index.html');
 
 /** Symbols the page AI needs to run. `hash` lives outside the marker blocks. */
 const REQUIRED_SYMBOLS = [
   'group', 'libCount', 'hash', 'sim', 'territory', 'territoryForBoard',
   'countEyes', 'regionInfo', 'hexDist', 'territoryNowForAI', 'aiChoose',
+  'playStoneOnBoard', 'canEnemyCaptureGroup', 'detectDeadStonesSmart',
 ];
 
 /** Symbols exported from the sandbox for cross-checking / benchmarking. */
 const PAGE_API_NAMES = [
   'aiChoose', 'sim', 'territory', 'territoryForBoard', 'group', 'libCount',
   'hash', 'countEyes', 'regionInfo', 'hexDist', 'territoryNowForAI',
-  'detectDeadStones',
+  'detectDeadStones', 'detectDeadStonesSmart', 'playStoneOnBoard', 'canEnemyCaptureGroup',
 ];
 
 const API_SCRIPT = '[' + PAGE_API_NAMES.map(function (n) {
@@ -222,7 +225,7 @@ function extractOldAISource(html) {
 
   if (!attempts.length) {
     const missing = REQUIRED_SYMBOLS.filter(function (n) { return !named[n]; });
-    throw new Error('could not extract old AI from index.html: markers=' + JSON.stringify(markers) +
+    throw new Error('could not extract old AI from page source: markers=' + JSON.stringify(markers) +
       ', missing symbols=' + JSON.stringify(missing));
   }
   return { attempts: attempts, markers: markers };
@@ -276,8 +279,8 @@ function evaluateCandidate(candidate, geo, rng) {
  */
 function createOldAI(opts) {
   const o = opts || {};
-  const pagePath = o.pagePath || DEFAULT_PAGE;
-  const html = o.html || fs.readFileSync(pagePath, 'utf8');
+  const pagePath = o.pagePath || null;
+  const html = o.html || (pagePath ? fs.readFileSync(pagePath, 'utf8') : readPageSource(path.resolve(__dirname, '..', '..')));
   const geo = rules.geometry(o.size || 9);
   const rng = rules.makeRng(o.seed || 1);
   const extraction = extractOldAISource(html);
@@ -398,7 +401,7 @@ function crossCheckRules(oldAI, R, opts) {
     positions: 0,
     movesChecked: 0,
     territoryChecked: 0,
-    deadChecked: 0,
+    deadChecked: 0, smartDeadChecked: 0,
     hashChecked: 0,
     hashOk: true,
     mismatches: [],
@@ -480,6 +483,21 @@ function testPosition(oldAI, R, st, out, fail) {
       }
     } catch (e) {
       fail('dead-throw', { error: String(e.message) });
+    }
+  }
+
+  // smart dead-stone detection: THIS is what the page actually scores with at
+  // pass end (doPass -> detectDeadStonesSmart).  The referee must match it.
+  if (typeof oldAI.api.detectDeadStonesSmart === 'function' && typeof R.detectDeadStonesSmart === 'function') {
+    try {
+      const dPage = Array.from(oldAI.api.detectDeadStonesSmart()).sort(function (a, b) { return a - b; });
+      const dOurs = R.detectDeadStonesSmart(st).sort(function (a, b) { return a - b; });
+      out.smartDeadChecked++;
+      if (dPage.length !== dOurs.length || dPage.some(function (v, i) { return v !== dOurs[i]; })) {
+        fail('smart-dead', { page: dPage, ours: dOurs });
+      }
+    } catch (e) {
+      fail('smart-dead-throw', { error: String(e.message) });
     }
   }
 }

@@ -458,3 +458,29 @@ Recommendation: **keep frozen v2.0.0 as the ship build** (best measured strength
 150 ms; page compute increase compensates elsewhere). If the page wants visible opening
 improvement, variant A is the candidate page toggle, but it needs 800 ms validation
 (and its 150 ms sample is only n=32, 53.1%).
+
+## 11. AI v2.1.0 — O(1) incremental playouts, dead-invasion & self-fill fixes, speed/style controls
+
+Upgrades `hexago-mcts/2.0.0` -> `hexago-mcts/2.1.0` (zero-dependency pure JS, synced to `js/ai/engine.js`).
+
+### Core engine changes (`dev/ai-engine.js`)
+- **O(1) incremental pseudo-liberty chains in playouts** (`playInitChains`, `checkPlayMove`, `playCommit`): replaces per-ply flood-fills with circular-linked chains tracking `(cLibCnt, cLibSum, cLibSq)` and O(1) Cauchy-Schwarz exact atari detection. Restores captured points to `empList`, resets `plyPasses` on placement, fixes first-play AMAF and `histCapEnd[histLen]`, and adds local atari/hex-pattern responses + LGRF-1.
+- **Deeper search & coherent openings**: `EXPAND_THRESH = 3`, internal progressive widening (`PW_K0 = 8, PW_K1 = 2.5`), `UCT_C = 0.70`, soft virtual root priors, multi-ply tree reuse (2..6 players), and opening coherence favouring distance 2-3 from own stones while penalising 1st-line edge clinging and distant scattering.
+- **Smart dead-stone root analysis & unconditional hopeless-move exclusion**: ports the page's `detectDeadStonesSmart` (`removeDeadStonesSmartImpl`, also used in `terminalScores` for exact MCTS pass-end evaluation) while analysing regions/eyes on `srcBoard` so unfinished own groups keep freedom to make 2 eyes. Unconditionally excludes from `candMoves` / `rootMoves`:
+  1. Pure own eyes (`ownEyeAt && rootCap === 0`, plus `countStabAt` skips 2-eye living groups).
+  2. Immediately smart-dead 0-gain placements, including 3rd-party dead-stone capture loops (`capLive === 0`).
+  3. Dead invasions into 2-eye (or 1-eye + small pocket) enemy territories and piling onto trapped 0-eye stones.
+  4. No-prisoners dead-group captures inside own 2-eye territory (`cTrap < 0 && capLive === 0 && g <= 0 && enDrop <= 0`).
+  5. Safe own-territory self-fills (`< LIVE_MIN_2EYE`, narrow, 2-eye-walled `< V_DEEP`, or `passes > 0`), allowing only genuine surrounded 3..6pt nakade vitals (`cRegOwnNakade`).
+- **Pass-streak awareness (`passedMask`)**: skips already-passed opponents in `computeEnemyThreat`, returns instant 0-playout pass when all other active players passed and we strictly lead (`winningOnPass`) or no gainful/dame move remains, and removes the `GUARD_MIN_VISITS` bypass for own-territory self-fills.
+- **Style presets (`createEngine({ style })`)**: `solid` / `balanced` / `aggressive` adjust exploration, attack, connection, and safety weights.
+
+### Page integration (`index.html`, `js/ai/pool.js`, `js/ai/worker.js`, `js/core/state.js`, `js/ui/settings.js`, `js/ui/debug.js`)
+- Honours engine pass (`-1`) as final; keeps `G.phase === 'dead'` (dead-stone confirmation bar) even in all-AI games.
+- Settings modal exposes **AI 思考時間** (`fast` 2.5-6 s / 4 workers, `deep` 12-15 s / 8 workers) and **AI 棋風** (`solid` / `balanced` / `aggressive`, bulk selector plus per-seat override by repeatedly tapping a seat's `AI` button), persisted in `sessionStorage`.
+- Centres `<header>` `HEXAGO` title via `grid-cols-[1fr_auto_1fr]`.
+
+### Validation (vs frozen `hexago-mcts/2.0.0`, smart referee, 0 illegal / 0 crashes)
+- Throughput (Node v26): 9-board **~19.5k pps** (3.1x), 13-board **~10.0k pps** (5.6x), 19-board **~4.5k pps** (8.5x), 25-board **~2.6k pps** (12.8x).
+- 2P 9-board @ 150 ms (n=64): **93.8%** (60W-4L); @ 800 ms (n=16): **81.3%** (13W-3L); 3P 13-board @ 300 ms (16 games): **16-0 in games** (66.7% seat vs 0.0%).
+- `node dev/engine-selftest.js`: **68/68 PASS**; `node dev/sync-engine.js --check`: OK.

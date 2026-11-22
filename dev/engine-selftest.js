@@ -7,7 +7,7 @@
  *   node dev/engine-selftest.js --strength --games 4
  *
  * The rules/hash/geometry checks compare against functions EXTRACTED FROM
- * index.html at runtime, so this test fails if the engine drifts from the page.
+ * the page sources (index.html + js/*.js) at runtime, so this test fails if the engine drifts from the page.
  */
 'use strict';
 
@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 
 const repo = path.resolve(__dirname, '..');
-const indexPath = path.join(repo, 'index.html');
+const { readPageSource } = require('./page-source');
 const enginePath = path.join(__dirname, 'ai-engine.js');
 
 const E = require(enginePath);
@@ -39,7 +39,7 @@ function section(title) {
 }
 
 /* ------------------------------------------------------------------ *
- *  Extract the reference implementation from index.html
+ *  Extract the reference implementation from the page sources
  * ------------------------------------------------------------------ */
 
 function sliceFunction(src, header) {
@@ -60,7 +60,7 @@ function sliceFunction(src, header) {
 }
 
 function makePageApi() {
-  const src = fs.readFileSync(indexPath, 'utf8');
+  const src = readPageSource(repo);
   const dirs = /const DIRS = \[[\s\S]*?\];/.exec(src);
   if (!dirs) throw new Error('selftest: cannot find DIRS in index.html');
   const parts = [
@@ -578,16 +578,28 @@ section('5b. v2 opening variety / framework / pass & eye endgame');
   check('own territory + real dame: plays the dame, never fills own territory/eye',
     rDame.move === dame, 'move=' + rDame.move + ' dame=' + dame + ' terr=' + terrA + ',' + terrB);
 
-  // a large own-bordered open area must NOT be treated as settled territory:
-  // the engine has to keep playing (defending/invading) instead of passing.
-  const bBig = new Array(n).fill(1);
-  const bigReg = [c];
-  for (const x of g.NB[c]) bigReg.push(x);
-  outer: for (const x of g.NB[c]) for (const y of g.NB[x]) { if (bigReg.indexOf(y) < 0) { bigReg.push(y); break outer; } }
-  for (const x of bigReg) bBig[x] = 0;
+  // v2.1 gain policy: a SMALL own-bordered pocket (8 pts, no enemy stones) is
+  // frozen for everyone - any invasion there is a dead stone, so passing is
+  // correct (v2.0.0 filled this instead).
+  const bPocket = new Array(n).fill(1);
+  const pocketReg = [c];
+  for (const x of g.NB[c]) pocketReg.push(x);
+  outer: for (const x of g.NB[c]) for (const y of g.NB[x]) { if (pocketReg.indexOf(y) < 0) { pocketReg.push(y); break outer; } }
+  for (const x of pocketReg) bPocket[x] = 0;
+  const rPocket = eng.think(mk(bPocket, 1, 0), { maxPlayouts: 400, seed: 17 });
+  check('small own-bordered pocket (8 pts) is frozen: pass, never fill',
+    rPocket.move === -1, 'move=' + rPocket.move + ' region=' + pocketReg.length);
+
+  // but a genuinely LARGE own-bordered open area (54 pts, no enemy stones yet)
+  // is NOT settled: an enemy invasion could live there, so the engine must
+  // keep playing (reinforce/defend) instead of passing.
+  const bBig = new Array(n).fill(0);
+  bBig[c] = 1;
+  for (const x of g.NB[c]) bBig[x] = 1;
   const rBig = eng.think(mk(bBig, 1, 0), { maxPlayouts: 400, seed: 17 });
-  check('large own-bordered open area is not treated as settled (keeps playing, does not pass)',
-    rBig.move >= 0 && bBig[rBig.move] === 0, 'move=' + rBig.move + ' region=' + bigReg.length);
+  const bigEmpty = bBig.reduce((a, v) => a + (v === 0 ? 1 : 0), 0);
+  check('large own-bordered open area is not settled: keeps playing, does not pass',
+    rBig.move >= 0 && bBig[rBig.move] === 0, 'move=' + rBig.move + ' region=' + bigEmpty);
 
   // opponent settled territory only: the two remaining points are surrounded by
   // opponent stones and are suicide for us -> pass
@@ -787,7 +799,7 @@ section('8. packaging');
   check('module exports geometry/createEngine/hashBoard/version',
     typeof E.geometry === 'function' && typeof E.createEngine === 'function' &&
     typeof E.hashBoard === 'function' && typeof E.version === 'string');
-  check('source contains no "</script>" (safe to inline in index.html)', src.indexOf('</script>') < 0);
+  check('source contains no "</script>" (safe for inline embedding)', src.indexOf('</script>') < 0);
   check('source contains no require()/document/window access', !/\brequire\s*\(/.test(src) && !/\bdocument\./.test(src) && !/\bwindow\./.test(src));
   let workerApi = null;
   try {
@@ -903,7 +915,7 @@ function runStrength(games) {
 
 console.log('HEXAGO engine self-test — engine: ' + E.version + ', node ' + process.version);
 console.log('engine file: ' + enginePath);
-console.log('reference:   ' + indexPath);
+console.log('reference:   ' + repo + '/{index.html,js/**/*.js}');
 
 const args = process.argv.slice(2);
 const doStrength = args.indexOf('--strength') >= 0;

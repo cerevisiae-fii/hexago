@@ -60,7 +60,9 @@ const USAGE = [
   '  --probe           run the new engine on hand-built positions; assert legality, print bestMoves',
   '  --style           self-play the engine (optionally two engines with --engine2) and report',
   '                    behaviour metrics: own-stone adjacency by phase, opening distances,',
-  '                    own-eye / own-territory fills, passes, openings, game length',
+  '                    own-eye / own-territory fills, passes, openings, game length,',
+  '                    move classification (own-region/dame/invasion fills, doomed invasions,',
+  '                    captures, tactical saves, attack/defense ratio), settledness',
   '',
   'Options:',
   '  --games N        number of games            (default 10; 4 for --new-vs-new/--style)',
@@ -866,7 +868,7 @@ function formatMatchReport(res) {
     const c = d.crossCheck;
     L.push('rules cross-check : ' + (c.ok ? 'OK' : 'FAIL') + ' vs page sim/territory -- ' +
       c.positions + ' positions, ' + c.movesChecked + ' move legality, ' + c.territoryChecked + ' territory, ' +
-      c.deadChecked + ' dead-stone, ' + c.hashChecked + ' hash vectors');
+      c.deadChecked + ' dead-stone, ' + (c.smartDeadChecked || 0) + ' smart-dead-stone, ' + c.hashChecked + ' hash vectors');
     if (!c.ok) for (let k = 0; k < Math.min(3, c.mismatches.length); k++) L.push('  ! ' + JSON.stringify(c.mismatches[k]));
   }
   if (d.engineVerify) {
@@ -1038,6 +1040,12 @@ function runStyle(cfg) {
         game: g.game, seats: g.seatKeys.slice(1), endReason: g.endReason, moves: g.totalMoves, boardMoves: g.boardMovesTotal,
         passes: g.passes, resignations: g.resignations, firstPass: g.firstPass,
         eyeFills: g.eyeFills, territoryFills: g.territoryFills, selfAdjacent: g.selfAdjacent,
+        ownRegionFills: g.ownRegionFills, dameFills: g.dameFills,
+        invasions: g.invasions, doomedInvasions: g.doomedInvasions,
+        captureMoves: g.captureMoves, tacticalSaves: g.tacticalSaves,
+        attackMoves: g.attackMoves, defenseMoves: g.defenseMoves,
+        firstSettledMoveIdx: g.firstSettledMoveIdx, firstSettledBoardMoveIdx: g.firstSettledBoardMoveIdx,
+        postSettlementMoves: g.postSettlementMoves, postSettlementOwnRegionFills: g.postSettlementOwnRegionFills,
         scores: g.scores, winners: g.winners, durationMs: g.durationMs,
       };
     }),
@@ -1131,7 +1139,7 @@ function playStyleGame(ctx, gi) {
     } else {
       const sim = R.simMove(state.board, move, state.turn, state.seenSet);
       if (!sim) { ctx.illegal++; endReason = 'illegal'; forfeitSeat = p; break; }
-      tracker.recordMove(state, move, key, stats);
+      tracker.recordMove(state, move, key, stats, sim);
       const applied = R.applyMove(state, move);
       tracker.recordCapture(key, applied.cap.length);
     }
@@ -1202,9 +1210,56 @@ function formatStyleReport(res) {
   L.push('  captures                   : ' + ov.captures + ' (' + (ov.moves ? Math.round((1000 * ov.captures) / ov.moves) / 1000 : 0) + '/move)');
   L.push('');
 
+  // per-engine move classification (complaints 1-3)
+  const engKeys = Object.keys(st.perEngine);
+  L.push('move classification per engine (counts / % of that engine\'s board moves)');
+  L.push('  own/eye: move into an empty region bordered only by the mover (eye = all 6 neighbours own); dame: no or 2+ border colours;');
+  L.push('  invasion: region bordered only by other colours (doomed = enemy-only, size<=10, no own stone within hex dist 3);');
+  L.push('  capture/save/attack/defense are flags and can co-occur (attack: capture, atari, or -1 lib on a <=3-lib no-two-eye enemy group;');
+  L.push('  defense: tactical save or stone neighbours all own). atk/def = attackMoves/defenseMoves.');
+  L.push('  eng   moves  ownFill      eyeFill      dameFill     invasion    doomed  capture      save         attack       defense       atk/def');
+  for (let k = 0; k < engKeys.length; k++) {
+    const e = st.perEngine[engKeys[k]];
+    const c = e.classification;
+    const cell = function (cnt, ratePct) { return padLeft(cnt, 4) + '/' + padLeft(ratePct == null ? '-' : ratePct, 4) + '%'; };
+    L.push('  ' + pad(engKeys[k], 4) + padLeft(e.moves, 6) +
+      '  ' + cell(c.ownRegionFills, c.ownRegionFillRatePct) +
+      '  ' + cell(c.eyeFills, c.eyeFillRatePct) +
+      '  ' + cell(c.dameFills, c.dameFillRatePct) +
+      '  ' + cell(c.invasions, c.invasionRatePct) +
+      '  ' + padLeft(c.doomedInvasions, 8) +
+      '  ' + cell(c.captureMoves, c.captureMoveRatePct) +
+      '  ' + cell(c.tacticalSaves, c.tacticalSaveRatePct) +
+      '  ' + cell(c.attackMoves, c.attackMoveRatePct) +
+      '  ' + cell(c.defenseMoves, c.defenseMoveRatePct) +
+      '  ' + padLeft(c.attackDefenseRatio == null ? '-' : c.attackDefenseRatio, 8));
+  }
+  for (let k = 0; k < engKeys.length; k++) {
+    const c = st.perEngine[engKeys[k]].classification;
+    L.push('  ' + pad(engKeys[k], 4) + ' attack detail: capture ' + c.attackByCapture + ' / atari ' + c.attackByAtari + ' / squeeze ' + c.attackBySqueeze +
+      ' | supported invasions ' + c.supportedInvasions +
+      ' | post-settlement moves ' + c.postSettlementMoves + ' (own-region fills ' + c.postSettlementOwnRegionFills + ')');
+  }
+  L.push('');
+
   const fp = st.passes.firstPass;
   L.push('passes       : ' + st.passes.total + ' total (' + st.passes.perGame + '/game) | first pass avg move ' + fp.meanMoveIdx + ', empty points ' + fp.meanEmptyFracPct + '% (min ' + fp.minEmptyFracPct + '%, max ' + fp.maxEmptyFracPct + '%)');
   L.push('resignations : ' + st.resignations.total + ' (' + st.resignations.perGame + '/game)');
+
+  // settledness (complaint 4)
+  const sn = st.settledness;
+  L.push('settledness  : fully settled = every empty region bordered by exactly one colour; first-settled = earliest board move');
+  L.push('               after which the board stayed fully settled until the end');
+  L.push('  games fully settled at end : ' + sn.gamesSettled + '/' + sn.games + (sn.settledGameFracPct == null ? '' : ' (' + sn.settledGameFracPct + '%)'));
+  if (sn.firstSettledMoveIdx.mean == null) {
+    L.push('  first settled move         : - (no game ended fully settled)');
+    L.push('  post-settlement moves      : - | own-region fills after settle: 0');
+  } else {
+    L.push('  first settled move         : avg game-move ' + sn.firstSettledMoveIdx.mean + ' (min ' + sn.firstSettledMoveIdx.min + ', max ' + sn.firstSettledMoveIdx.max +
+      ') | avg board-move ' + sn.firstSettledBoardMoveIdx.mean + ' | (first pass avg move ' + fp.meanMoveIdx + ')');
+    L.push('  post-settlement moves      : avg ' + sn.postSettlementMoves.mean + '/settled game (min ' + sn.postSettlementMoves.min + ', max ' + sn.postSettlementMoves.max + ', total ' + sn.postSettlementMoves.total + ' over ' + sn.gamesSettled + ' settled games)' +
+      ' | own-region fills after settle: ' + sn.postSettlementOwnRegionFills.total + ' total (' + sn.postSettlementOwnRegionFills.mean + '/settled game)');
+  }
   const div = st.openingDiversity;
   L.push('opening diversity: ' + div.games + ' games -> ' + div.distinctFirstMoves + ' distinct first moves, ' + div.distinctOpeningSequences + ' distinct first-' + div.openingSequenceLength + ' sequences');
   L.push('  first moves: ' + div.firstMoves.map(function (e) { return e.move + e.coord + 'x' + e.count; }).join(', '));

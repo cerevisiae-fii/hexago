@@ -4,7 +4,7 @@
 // 読み込む。強さに応じて複数 Worker で同じ局面を並列探索し（root parallel MCTS）、
 // ルート直下の訪問数を合算して着手を選ぶ。Worker が使えない環境ではメインスレッドで短い予算、
 // それも失敗した場合だけ従来の1手読み AI (aiChoose) にフォールバックする。
-// AIは常に最強設定の1本。強さの段階は持たない（テスト用に debug から予算だけ上書き可能）。
+// AI モード: 'fast'（標準・高速 2.5〜6s・最大4並列）と 'beta'（最強β 12〜15s・最大8並列）を切替可能。
 let aiTestBudgetMs = null, lastAIStats = null;
 let aiGeneration = 0, aiWorkerError = '', aiMsgSeq = 0, aiWaiters = new Map();
 let aiPool = [];   // [{ index, worker, url, failed }]
@@ -17,16 +17,38 @@ const AI_WORKER_URL = (function () {
   } catch (e) { return './js/ai/worker.js'; }
 })();
 
+function currentAIMode() {
+  return (typeof aiMode === 'string' && aiMode === 'beta') ? 'beta' : 'fast';
+}
+function setAIMode(nextMode) {
+  const m = nextMode === 'beta' ? 'beta' : 'fast';
+  if (typeof aiMode !== 'undefined' && aiMode === m) return m;
+  aiMode = m;
+  // 並列数が変わるので待機中プールを作り直す（思考中なら完了後に自然調整）
+  if (!aiBusy && aiPool.length) {
+    aiPool.forEach(slot => { try { slot.worker.terminate(); } catch (e) { } });
+    aiPool = [];
+  }
+  return m;
+}
 function aiBudgetMs() {
   if (aiTestBudgetMs != null) return aiTestBudgetMs;
-  // 最強固定。目標は「できる限り強い」ことで、計算時間は従来どおり最大を充てる。
-  // 終盤の利得即断（0プレイアウトのパス）だけは維持: あれは省略ではなく正しい終盤。
-  return P.length >= 250 ? 15000 : 12000;
+  const pts = P.length;
+  if (currentAIMode() === 'beta') {
+    // 最強（β）: 最大予算で深く読む。終盤の即パス判定は同様に効く。
+    return pts >= 250 ? 15000 : 12000;
+  }
+  // 高速（標準）: 1個前の高速予算（9路2.5s / 13路3s / 19路4s / 25路6s）。
+  if (pts >= 450) return 6000;
+  if (pts >= 250) return 4000;
+  if (pts >= 120) return 3000;
+  return 2500;
 }
 function aiPoolWant() {
   const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-  // メインスレッドを空けるため cores-1 を上限に。低メモリ端末では控えめに。
-  let want = Math.min(8, Math.max(1, cores));
+  let want = currentAIMode() === 'beta'
+    ? Math.min(8, Math.max(1, cores))
+    : Math.min(4, Math.max(1, cores - 1));
   const mem = (typeof navigator !== 'undefined' && navigator.deviceMemory) || 8;
   if (mem <= 4) want = Math.min(want, 2);
   return Math.max(1, want);
@@ -113,6 +135,9 @@ function aiThinkOnSlot(slot, state, budgetMs) {
 }
 // root parallel MCTS: 各 Worker のルート直下の訪問数を合算して着手を選ぶ。
 function mergeAIResults(results) {
+  // 全 Worker が即パス／投了を返した場合はそのまま尊重する
+  if (results.every(r => r && r.move === -2)) return Object.assign({}, results[0], { workers: results.length });
+  if (results.every(r => r && r.move === -1)) return Object.assign({}, results[0], { workers: results.length });
   const acc = new Map();
   for (const r of results) {
     const list = (Array.isArray(r.rootMoves) && r.rootMoves.length) ? r.rootMoves : (r.bestMoves || []);

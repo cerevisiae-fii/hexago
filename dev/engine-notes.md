@@ -743,3 +743,56 @@ best move with only ~12 visits at 300 ms.
 Ablation notes (Stage 2 vs Stage 1 at 150 ms n=24: `UCT_C=0.70` 83.3% > `0.45` 75.0% > `0.25` 70.8%; 3P13 @300 ms x12: Stage 2 beat Stage 1 11-1 in games while cutting doomed invasions 85 -> 39 and opening `nearestOwn` 3.8 -> 2.6).
 
 Build md5: `af69b2bd7bc5b87fa10a6b609ccb70f7` (`hexago-mcts/3.0.0`).
+
+## 14. AI v3.1 — Unconditional dead-invasion eradication & fast/beta mode selector (v3.1.0)
+
+User live-play report on v3.0.0 (`12 s x 8 workers`): at full browser budgets,
+the AI still dumped stones into already-living 2-eye enemy territories until
+full, and wasted moves around already-dead stones.
+
+### Root causes found
+1. `GUARD_MIN_VISITS = 16000` disabled the dead-invasion guard at 12 s browser
+   budgets (each worker hit 40k-250k visits), and `js/ai/pool.js` `mergeAIResults`
+   read raw `rootMoves` directly, bypassing all final-selection guards.
+2. `computeBaseline` / `staticGainFor` used conservative `removeDeadStones`
+   instead of `removeDeadStonesSmartImpl`. Worse, dropping a dead stone into an
+   enemy territory turned it into a 2-colour region ("dame"), causing chain-reaction
+   dead-stone piling and blocking `passGate`.
+3. `nearWeakEn` / `atkBonusAt` gave attack bonuses for poking enemy stones that
+   were already dead under `detectDeadStonesSmart`.
+
+### What v3.1.0 does
+- Computes `cleanBoard` via `removeDeadStonesSmartImpl` at the root (only ~3-11 ms
+  overhead even on 50%-filled 13/19/25 boards) while analysing region ownership
+  and independent eye counts (`cleanOwnRegs`, `cleanEyes`, `cRegBorderAllAlive`,
+  `cRegBorderHas1Eye`, `cRegWide`) on `srcBoard` so unfinished 0/1-eye own groups
+  are never erased and always keep full freedom to make 2 eyes.
+- Unconditionally excludes `mvHopeless` moves from `candMoves` / `rootMoves`
+  (so 12 s x 8-worker merges can never select them, and if all legal moves are
+  hopeless, returns an instant 0-playout pass):
+  1. Pure own eyes (`ownEyeAt && rootCap === 0`).
+  2. Lone placements (`ownN === 0`) immediately removed by `detectDeadStonesSmart`
+     with <= 0 score delta and no live weak enemy adjacent.
+  3. Invasions into 2-eye living enemy territories too small/narrow to live
+     (`cSize < LIVE_MIN_2EYE || cWide < 3 || libs < 3`), or 1-eye + 4..10pt
+     enemy pockets with no live weak enemy.
+  4. Piling onto trapped 0-eye stones inside 2-eye enemy pockets, and defender
+     moves against stones already smart-dead inside a 2-eye territory.
+  5. Settled own-territory fills when already 2-eye alive (`cSize < LIVE_MIN_2EYE`).
+- UI (`index.html`, `js/core/state.js`, `js/ui/settings.js`, `js/ai/pool.js`,
+  `js/ui/debug.js`): adds **AI モード** selector — **高速（標準）** (2.5/3/4/6 s,
+  up to 4 workers) and **最強（β）** (12/15 s, up to 8 workers), persisted in
+  `sessionStorage`.
+
+### Validation (v3.1.0 vs frozen v2.0.0, smart referee, 0 illegal / 0 crashes)
+
+| benchmark | result | behaviour highlights |
+|---|---|---|
+| 2P 9-board, 150 ms/move (4 seeds, n=64) | **93.8%** (60W-4L-0D) | eye **0**, own **0**, doomed **0** |
+| 2P 9-board, 800 ms/move (2 seeds, n=16) | **81.3%** (13W-3L-0D) | eye **0**, doomed **0** |
+| 3P 13-board, 300 ms/move (16 games / 48 seats) | **16-0 in games** (A 66.7% vs B 0.0%) | eye **0**, own **0**, doomed **1.4%** (23 vs B 180, -87%), openOwn **2.8** |
+| 3P 13-board self-play, 250 ms/move (n=4) | avg **152.3** moves (-36% vs v2.0.0) | all 4 games 127/127 pts settled, eye **0**, own 1, doomed 2.3% |
+| `dev/engine-selftest.js` / `dev/smart-parity.js` | **68/68** / **42/42 PASS** | 13-board 9.9k pps, 25-board 2.6k pps |
+| `dev/probe-behavior.js --time 300 --assert` | **ALL PASS** (A/B/E/F/G1-G3/H1-H3) | H1 10-pt 2-eye pocket instant pass (even @1500ms); H2 smart-dead stone both sides pass; H3 trapped stone no piling |
+
+Build md5: `5a9ec3f87fab0334a4659567dd8e0d06` (`hexago-mcts/3.1.0`).

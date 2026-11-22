@@ -244,6 +244,58 @@ console.log('== engine: ' + AI.version + ' budget=' + TIME_MS + 'ms ==\n');
   checkProbe('Probe G3: does not hug 1st-line edge in opening (<= 25%)', edgePct <= 25, edgePct.toFixed(1) + '%');
 }
 
+/* ---------- Probe H: dead-invasion & already-dead-stone eradication (3P 13-board) ---------- */
+// H1: 10-pt pocket enclosed inside a 2-eye living P2 wall (no dame anywhere) -> P1 must PASS
+//     even at high search budgets (1500ms, simulating 12s browser depth).
+// H2: 1 already-smart-dead P1 stone inside P2's 5-pt 2-eye pocket -> BOTH P1 and P2 must PASS.
+// H3: 1 trapped 0-eye P1 stone inside P2's 10-pt 2-eye pocket -> P1 must PASS (no piling).
+{
+  const pc = 3, { g, map } = mk(13, pc);
+  const B = new Int8Array(g.n);
+  for (let i = 0; i < g.n; i++) {
+    const [q] = g.P[i];
+    if (q >= 3) B[i] = 1;
+    else if (q <= -1) B[i] = 2;
+    else B[i] = 3;
+  }
+  setStone(B, map, 4, -2, 0); setStone(B, map, 4, 1, 0);   // P1 2 eyes
+  setStone(B, map, 1, -3, 0); setStone(B, map, 1, 2, 0);   // P3 2 eyes
+  setStone(B, map, -5, 1, 0); setStone(B, map, -5, 4, 0);  // P2 2 eyes
+  const pocket = [[-2,-1],[-2,0],[-2,1],[-2,2],[-2,3],[-3,0],[-3,1],[-3,2],[-3,3],[-3,4]]
+    .filter(([q, r]) => map[q + ',' + r] !== undefined);
+  for (const [q, r] of pocket) setStone(B, map, q, r, 0);
+
+  const rH1 = AI.createEngine({ size: 13, playerCount: pc }).think(
+    { size: 13, playerCount: pc, turn: 1, board: Array.from(B), out: [false,false,false,false], passes: 0, seen: [] },
+    { budgetMs: Math.max(TIME_MS, 1000), seed: 1 }
+  );
+  console.log('H1) 10-pt pocket inside 2-eye P2 wall (no dame), deep budget. P1 -> ' + rH1.move + ' (playouts=' + rH1.playouts + ')');
+  checkProbe('Probe H1: never invades <15pt pocket inside 2-eye living enemy wall', rH1.move === -1, 'move=' + rH1.move);
+
+  const B2 = B.slice();
+  for (const [q, r] of pocket.slice(5)) setStone(B2, map, q, r, 2);
+  setStone(B2, map, -2, 0, 1);
+  const rH2a = AI.createEngine({ size: 13, playerCount: pc }).think(
+    { size: 13, playerCount: pc, turn: 1, board: Array.from(B2), out: [false,false,false,false], passes: 0, seen: [] },
+    { budgetMs: TIME_MS, seed: 1 }
+  );
+  const rH2b = AI.createEngine({ size: 13, playerCount: pc }).think(
+    { size: 13, playerCount: pc, turn: 2, board: Array.from(B2), out: [false,false,false,false], passes: 0, seen: [] },
+    { budgetMs: TIME_MS, seed: 1 }
+  );
+  console.log('H2) 1 smart-dead P1 stone inside 5-pt P2 2-eye pocket. P1 -> ' + rH2a.move + ', P2 -> ' + rH2b.move);
+  checkProbe('Probe H2: neither side wastes moves on already-smart-dead stones', rH2a.move === -1 && rH2b.move === -1, 'P1=' + rH2a.move + ' P2=' + rH2b.move);
+
+  const B3 = B.slice();
+  setStone(B3, map, -2, 0, 1);
+  const rH3 = AI.createEngine({ size: 13, playerCount: pc }).think(
+    { size: 13, playerCount: pc, turn: 1, board: Array.from(B3), out: [false,false,false,false], passes: 0, seen: [] },
+    { budgetMs: TIME_MS, seed: 1 }
+  );
+  console.log('H3) 1 trapped 0-eye P1 stone inside 10-pt P2 2-eye pocket. P1 -> ' + rH3.move);
+  checkProbe('Probe H3: does not pile more dead stones onto trapped stone in 2-eye pocket', rH3.move === -1, 'move=' + rH3.move);
+}
+
 if (ASSERT && failures > 0) {
   console.error('\nPROBE ASSERTIONS FAILED: ' + failures);
   process.exit(1);

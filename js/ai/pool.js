@@ -24,6 +24,13 @@ function currentAIMode() {
 function currentAIStyle() {
   return (typeof aiStyle === 'string' && (aiStyle === 'solid' || aiStyle === 'aggressive')) ? aiStyle : 'balanced';
 }
+function aiStyleForSeat(p) {
+  if (typeof seatStyles !== 'undefined' && Array.isArray(seatStyles) && p >= 1 && p <= 6) {
+    const v = seatStyles[p];
+    if (v === 'solid' || v === 'balanced' || v === 'aggressive') return v;
+  }
+  return currentAIStyle();
+}
 function setAIMode(nextMode) {
   const m = (nextMode === 'deep' || nextMode === 'beta') ? 'deep' : 'fast';
   if (typeof aiMode !== 'undefined' && aiMode === m) return m;
@@ -38,6 +45,16 @@ function setAIMode(nextMode) {
 function setAIStyle(nextStyle) {
   const s = (nextStyle === 'solid' || nextStyle === 'aggressive') ? nextStyle : 'balanced';
   aiStyle = s;
+  if (typeof seatStyles !== 'undefined' && Array.isArray(seatStyles)) {
+    for (let p = 1; p <= 6; p++) seatStyles[p] = s;
+  }
+  return s;
+}
+function setSeatAIStyle(p, nextStyle) {
+  const s = (nextStyle === 'solid' || nextStyle === 'aggressive') ? nextStyle : 'balanced';
+  if (typeof seatStyles !== 'undefined' && Array.isArray(seatStyles) && p >= 1 && p <= 6) {
+    seatStyles[p] = s;
+  }
   return s;
 }
 function aiBudgetMs() {
@@ -115,7 +132,7 @@ function ensureMainAI() {
   return aiMainAPI;
 }
 function mainAIEngine(state) {
-  const style = currentAIStyle();
+  const style = aiStyleForSeat(state && state.turn);
   const key = state.size + ':' + state.playerCount + ':' + style;
   if (!aiMainEngines[key]) aiMainEngines[key] = ensureMainAI().createEngine({ size: state.size, playerCount: state.playerCount, style: style });
   return aiMainEngines[key];
@@ -140,7 +157,7 @@ function aiThinkOnSlot(slot, state, budgetMs) {
       resolve: r => { clearTimeout(timer); resolve(r); },
       reject: e => { clearTimeout(timer); reject(e); },
     });
-    slot.worker.postMessage({ id: id, state: state, options: { budgetMs: budgetMs, style: currentAIStyle(), returnAllMoves: true, resignThreshold: 0.02 } });
+    slot.worker.postMessage({ id: id, state: state, options: { budgetMs: budgetMs, style: aiStyleForSeat(state && state.turn), returnAllMoves: true, resignThreshold: 0.02 } });
   });
 }
 // root parallel MCTS: 各 Worker のルート直下の訪問数を合算して着手を選ぶ。
@@ -223,11 +240,7 @@ function aiFallbackMove() {
 function maybeAI() {
   if (G.over || aiBusy || (mode === 'online' && !isHost)) return;
   if (G.phase === 'setup') return;
-  if (G.phase === 'dead') {
-    const allAI = Array.from({length: G.playerCount || playerCount}, (_, i) => i + 1).every(p => aiSeatOf(p));
-    if ((mode === 'local' || (mode === 'online' && isHost)) && allAI) { finishScore(); after(); }
-    return;
-  }
+  if (G.phase === 'dead') return;
   if (G.phase !== 'playing' || !aiSeatOf(G.turn)) return;
   const gen = ++aiGeneration, turn = G.turn;
   const state = aiStateSnapshot(), budget = aiBudgetMs();

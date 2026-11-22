@@ -2,7 +2,8 @@
 let G, seenSet = new Set();
 let onlineAI = false, pendingSize = 9, mode = 'local', playerCount = 3, seats = [0, 'human', 'human', 'human', 'human', 'human', 'human'];
 let aiMode = 'fast';      // 'fast' = 高速（2.5〜6s・最大4並列）, 'deep' = 長考（12〜15s・最大8並列）
-let aiStyle = 'balanced'; // 'solid' = 堅実, 'balanced' = バランス, 'aggressive' = 攻撃的
+let aiStyle = 'balanced'; // 一括デフォルト棋風: 'solid' | 'balanced' | 'aggressive'
+let seatStyles = [0, 'balanced', 'balanced', 'balanced', 'balanced', 'balanced', 'balanced'];
 let boardView = 'host';
 let prev = -1, ptype = 'mouse', aiBusy = false;
 let peer = null, conns = [], hostConn = null, myRole = null, isHost = false, roomCode = null;
@@ -25,7 +26,7 @@ function hash(a) { // cyrb53
 }
 const KEY = 'hexago-save-v1';
 function save() {
-  try { sessionStorage.setItem(KEY, JSON.stringify({ G, onlineAI, pendingSize, mode, seats, aiMode, aiStyle, theme: theme.id, sound: snd.on })); } catch (e) { }
+  try { sessionStorage.setItem(KEY, JSON.stringify({ G, onlineAI, pendingSize, mode, seats, aiMode, aiStyle, seatStyles, theme: theme.id, sound: snd.on })); } catch (e) { }
   try { if (typeof saveOnlineSession === 'function') saveOnlineSession(); } catch (e) { }
 }
 function load() {
@@ -33,7 +34,7 @@ function load() {
     const s = JSON.parse(sessionStorage.getItem(KEY) || 'null');
     if (!s || !s.G || ![9, 13, 19, 25].includes(s.G.size)) return false;
     build(s.G.size); if (s.G.board.length !== P.length) return false;
-    G = s.G; onlineAI = !!s.onlineAI; pendingSize = s.pendingSize || G.size; aiMode = (s.aiMode === 'deep' || s.aiMode === 'beta') ? 'deep' : 'fast'; aiStyle = (s.aiStyle === 'solid' || s.aiStyle === 'aggressive') ? s.aiStyle : 'balanced'; seats = s.seats || seats; seats = Array.from({length:7}, (_, i) => i === 0 ? 0 : (seats[i] === 'ai' ? 'ai' : 'human')); playerCount = Math.max(2, Math.min(6, G.playerCount || 3)); G.playerCount=playerCount; G.damage=Array.from({length:playerCount+1},(_,i)=>(G.damage||[])[i]||0); G.out=Array.from({length:playerCount+1},(_,i)=>!!((G.out||[])[i])); seats.length = 7; seatOwners = Array(7).fill(null); seatNicknames = ['', '', '', '', '', '', '']; roomPool = Object.create(null); disconnectedNicknames = Object.create(null); G.aiSeats = Array.from({length:playerCount+1},(_,i)=>i===0?false:(seats[i] !== 'human')); G.aiSeat = G.aiSeats.findIndex((v,i)=>i>0&&v); mode = 'local';
+    G = s.G; onlineAI = !!s.onlineAI; pendingSize = s.pendingSize || G.size; aiMode = (s.aiMode === 'deep' || s.aiMode === 'beta') ? 'deep' : 'fast'; aiStyle = (s.aiStyle === 'solid' || s.aiStyle === 'aggressive') ? s.aiStyle : 'balanced'; const ss = Array.isArray(s.seatStyles) ? s.seatStyles : null; seatStyles = Array.from({length:7}, (_, i) => i === 0 ? 0 : (ss && (ss[i] === 'solid' || ss[i] === 'balanced' || ss[i] === 'aggressive') ? ss[i] : aiStyle)); seats = s.seats || seats; seats = Array.from({length:7}, (_, i) => i === 0 ? 0 : (seats[i] === 'ai' ? 'ai' : 'human')); playerCount = Math.max(2, Math.min(6, G.playerCount || 3)); G.playerCount=playerCount; G.damage=Array.from({length:playerCount+1},(_,i)=>(G.damage||[])[i]||0); G.out=Array.from({length:playerCount+1},(_,i)=>!!((G.out||[])[i])); seats.length = 7; seatOwners = Array(7).fill(null); seatNicknames = ['', '', '', '', '', '', '']; roomPool = Object.create(null); disconnectedNicknames = Object.create(null); G.aiSeats = Array.from({length:playerCount+1},(_,i)=>i===0?false:(seats[i] !== 'human')); G.aiSeat = G.aiSeats.findIndex((v,i)=>i>0&&v); mode = 'local';
     if (THEMES[s.theme]) theme = THEMES[s.theme]; if (s.sound === false) snd.on = false;
     setSeen(); return true;
   } catch (e) { return false; }

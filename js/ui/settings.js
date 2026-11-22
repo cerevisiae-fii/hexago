@@ -1,6 +1,18 @@
 // ===== プレイヤー設定 =====
 const SEAT_MODES = ['human', 'ai'];
 const SEAT_LABELS = { human: '人間', ai: 'AI' };
+const AI_STYLE_ORDER = ['solid', 'balanced', 'aggressive'];
+const AI_STYLE_LABELS = { solid: '堅実', balanced: 'バランス', aggressive: '攻撃的' };
+function uniformAIStyle() {
+  let first = null;
+  for (let p = 1; p <= playerCount; p++) {
+    if (seats[p] !== 'ai') continue;
+    const st = typeof aiStyleForSeat === 'function' ? aiStyleForSeat(p) : currentAIStyle();
+    if (first === null) first = st;
+    else if (first !== st) return null; // 席ごとに異なるカスタム設定
+  }
+  return first !== null ? first : (typeof currentAIStyle === 'function' ? currentAIStyle() : 'balanced');
+}
 function canManageRoom() { return mode === 'local' || !roomCode || isHost; }
 function isMatchRunning() { return !!(G && G.phase !== 'setup' && !G.over); }
 function setSeatAIFlag(p) {
@@ -56,8 +68,9 @@ function syncSettings() {
     b.setAttribute('aria-pressed', String(active));
     b.disabled = !canManageRoom();
   });
+  const uniStyle = uniformAIStyle();
   document.querySelectorAll('#aiStyleBtns .opt').forEach(b => {
-    const active = b.dataset.aiStyle === (typeof currentAIStyle === 'function' ? currentAIStyle() : 'balanced');
+    const active = uniStyle !== null && b.dataset.aiStyle === uniStyle;
     b.classList.toggle('on', active);
     b.setAttribute('aria-pressed', String(active));
     b.disabled = !canManageRoom();
@@ -80,6 +93,23 @@ function syncSettings() {
       if (seats[p] === value) b.setAttribute('aria-pressed', 'true');
       b.onclick = () => setSeatMode(p, value);
       row.appendChild(b);
+    }
+    if (seats[p] === 'ai') {
+      const curSt = typeof aiStyleForSeat === 'function' ? aiStyleForSeat(p) : 'balanced';
+      const sb = document.createElement('button'); sb.type = 'button';
+      sb.dataset.seatStyle = String(p);
+      sb.className = 'opt w-20 shrink-0 text-[11px]';
+      sb.textContent = AI_STYLE_LABELS[curSt] || 'バランス';
+      sb.title = 'タップで棋風を切替（堅実 / バランス / 攻撃的）';
+      sb.disabled = !canManageRoom();
+      sb.onclick = () => {
+        if (!canManageRoom()) return;
+        snd.click();
+        const nextSt = AI_STYLE_ORDER[(AI_STYLE_ORDER.indexOf(curSt) + 1) % AI_STYLE_ORDER.length];
+        if (typeof setSeatAIStyle === 'function') setSeatAIStyle(p, nextSt);
+        syncSettings(); save();
+      };
+      row.appendChild(sb);
     }
     $('seatBtns').appendChild(row);
   }

@@ -294,6 +294,92 @@ console.log('== engine: ' + AI.version + ' budget=' + TIME_MS + 'ms ==\n');
   );
   console.log('H3) 1 trapped 0-eye P1 stone inside 10-pt P2 2-eye pocket. P1 -> ' + rH3.move);
   checkProbe('Probe H3: does not pile more dead stones onto trapped stone in 2-eye pocket', rH3.move === -1, 'move=' + rH3.move);
+
+  // I1: No prisoners in HEXAGO — P2 has a 4-stone already-smart-dead group IN ATARI (rootCap=4!)
+  // inside P1's 2-eye territory. Capturing it gains 0 pts and opens an empty cavity! P1 must PASS!
+  const BI = new Int8Array(g.n);
+  for (let i = 0; i < g.n; i++) { const [q] = g.P[i]; BI[i] = q >= 0 ? 1 : (q <= -4 ? 2 : 3); }
+  setStone(BI, map, 5, -4, 0); setStone(BI, map, 4, 1, 0);     // P1 2 real eyes (far from P2 dead group)
+  setStone(BI, map, -2, -1, 0); setStone(BI, map, -2, 3, 0);   // P3 2 interior eyes (q in {-1,-2,-3})
+  setStone(BI, map, -5, 1, 0); setStone(BI, map, -5, 4, 0);    // P2 2 eyes (q<=-4)
+  // 4-stone P2 dead group inside P1's territory (q>=1), with ONLY 1 liberty (1,-1) -> capturing removes 4 stones!
+  setStone(BI, map, 2, -1, 2); setStone(BI, map, 2, 0, 2); setStone(BI, map, 3, -1, 2); setStone(BI, map, 3, -2, 2);
+  setStone(BI, map, 1, -1, 0);
+  for (const style of ['solid', 'balanced', 'aggressive']) {
+    const rI1 = AI.createEngine({ size: 13, playerCount: pc, style }).think(
+      { size: 13, playerCount: pc, turn: 1, board: Array.from(BI), out: [false,false,false,false], passes: 0, seen: [] },
+      { budgetMs: TIME_MS, seed: 1 }
+    );
+    checkProbe('Probe I1 [' + style + ']: does not capture already-dead 4-stone group in own 2-eye territory (no prisoners)', rI1.move === -1, 'move=' + rI1.move);
+  }
+
+  // I2: 3rd-party dead stone in atari inside P2's 2-eye territory -> P1 must NEVER capture and die
+  const BI2 = B.slice();
+  for (const [q, r] of pocket) setStone(BI2, map, q, r, 2);
+  setStone(BI2, map, -2, 0, 3); setStone(BI2, map, -2, 1, 0);
+  for (const style of ['solid', 'balanced', 'aggressive']) {
+    const rI2 = AI.createEngine({ size: 13, playerCount: pc, style }).think(
+      { size: 13, playerCount: pc, turn: 1, board: Array.from(BI2), out: [false,false,false,false], passes: 0, seen: [] },
+      { budgetMs: TIME_MS, seed: 1 }
+    );
+    checkProbe('Probe I2 [' + style + ']: never captures 3rd-party dead stone to die immediately', rI2.move === -1, 'move=' + rI2.move);
+  }
+
+  // J1: Sealed own territory of 12 pts (single own region, cAlive===0!) + enemy 2-eye 10-pt
+  // territory, 0 dame, passes=0. Must PASS immediately (never self-fill to carve 2 eyes).
+  const BJ1 = new Int8Array(g.n);
+  for (let i = 0; i < g.n; i++) {
+    const [q, r] = g.P[i];
+    if (q >= 5 && !(q === 5 && r <= -4)) BJ1[i] = 0;  // 12-pt P1 single own territory (cAlive===0)
+    else if (q >= 0) BJ1[i] = 1;                       // P1 wall
+    else BJ1[i] = 2;                                   // P2 wall
+  }
+  setStone(BJ1, map, -2, -2, 0); setStone(BJ1, map, -2, 3, 0); // P2 2 eyes so P1 has no wall attack
+  for (const [q, r] of [[-5,1],[-5,2],[-5,3],[-5,4],[-6,2],[-6,3],[-6,4],[-6,5]]) setStone(BJ1, map, q, r, 0); // 8-pt P2 pocket
+  const j1P1Sz = Array.from(BJ1).filter((v, idx) => v === 0 && g.P[idx][0] >= 5).length;
+  for (const style of ['solid', 'balanced', 'aggressive']) {
+    const rJ1 = AI.createEngine({ size: 13, playerCount: 2, style }).think(
+      { size: 13, playerCount: 2, turn: 1, board: Array.from(BJ1), out: [false,false,false], passes: 0, seen: [] },
+      { budgetMs: TIME_MS, seed: 1 }
+    );
+    checkProbe('Probe J1 [' + style + ']: never self-fills safe ' + j1P1Sz + '-pt own territory (single region)', rJ1.move === -1, 'move=' + rJ1.move);
+  }
+
+  // J2: All other players already passed (passEnds=true), P1 has huge 28-pt own territory & leads -> instant PASS!
+  const BJ2 = new Int8Array(g.n);
+  for (let i = 0; i < g.n; i++) {
+    const [q] = g.P[i];
+    if (q >= 3) BJ2[i] = 0;          // large P1 own territory
+    else if (q >= 0) BJ2[i] = 1;     // P1 wall
+    else if (q >= -3) BJ2[i] = 2;    // P2 wall
+    else BJ2[i] = 0;                 // P2 territory (smaller)
+  }
+  for (const style of ['solid', 'balanced', 'aggressive']) {
+    const rJ2 = AI.createEngine({ size: 13, playerCount: 2, style }).think(
+      { size: 13, playerCount: 2, turn: 1, board: Array.from(BJ2), out: [false,false,false], passes: 1, seen: [] },
+      { budgetMs: TIME_MS, seed: 1 }
+    );
+    checkProbe('Probe J2 [' + style + ']: instant pass when opponent already passed and we lead (large own territory)', rJ2.move === -1 && rJ2.playouts === 0, 'move=' + rJ2.move + ' playouts=' + rJ2.playouts);
+  }
+
+  // J3: 3P game where P1 already passed (passes=1), 0 dame left, P2 has large 27-pt own territory
+  // while P1 & P3 have 2-eye walls -> P2 must PASS (never self-fill large own territory)!
+  const BJ3 = new Int8Array(g.n);
+  for (let i = 0; i < g.n; i++) {
+    const [q, r] = g.P[i];
+    if (q >= 3) BJ3[i] = 0;           // P2 large own territory (~27 pts)
+    else if (q >= 1) BJ3[i] = 2;      // P2 wall
+    else BJ3[i] = r <= 0 ? 1 : 3;     // P1 & P3 solid walls
+  }
+  setStone(BJ3, map, -2, -2, 0); setStone(BJ3, map, -4, -1, 0); // P1 2 eyes
+  setStone(BJ3, map, -2, 3, 0);  setStone(BJ3, map, -4, 4, 0);  // P3 2 eyes
+  for (const style of ['solid', 'balanced', 'aggressive']) {
+    const rJ3 = AI.createEngine({ size: 13, playerCount: 3, style }).think(
+      { size: 13, playerCount: 3, turn: 2, board: Array.from(BJ3), out: [false,false,false,false], passes: 1, seen: [] },
+      { budgetMs: TIME_MS, seed: 1 }
+    );
+    checkProbe('Probe J3 [' + style + ']: 3P passes=1 never self-fills large own territory', rJ3.move === -1, 'move=' + rJ3.move);
+  }
 }
 
 if (ASSERT && failures > 0) {

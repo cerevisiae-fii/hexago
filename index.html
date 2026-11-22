@@ -10,10 +10,10 @@
 </head>
 <body class="min-h-screen flex flex-col items-center justify-between p-3 sm:p-6 select-none">
 <div class="w-full max-w-xl flex flex-col items-center gap-4 sm:gap-5">
-  <header class="w-full flex items-center justify-between pt-1">
-    <div class="w-8"></div>
+  <header class="w-full grid grid-cols-[1fr_auto_1fr] items-center pt-1">
+    <div aria-hidden="true"></div>
     <h1 class="text-2xl sm:text-3xl font-extrabold tracking-wider text-center">HEXAGO</h1>
-    <div class="flex items-center gap-1">
+    <div class="flex items-center gap-1 justify-self-end">
     <button id="btnOpenPhoto" title="写真から盤面を復元" aria-label="写真から盤面を復元" class="w-9 h-9 flex items-center justify-center rounded-full text-current opacity-60 hover:opacity-90 hover:bg-black/5 active:scale-95 transition-all">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h1.5l1-2h7l1 2H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><circle cx="12" cy="13" r="3.5" stroke-width="2"/></svg>
     </button>
@@ -127,19 +127,19 @@
     <div id="aiModeConfig" class="flex flex-col gap-1.5">
       <label class="text-xs font-bold tracking-wider text-neutral-500">AI 思考時間</label>
       <div class="grid grid-cols-2 gap-2" id="aiModeBtns">
-        <button type="button" data-ai-mode="fast" class="opt">高速（標準）</button>
-        <button type="button" data-ai-mode="deep" class="opt">長考（最強）</button>
+        <button type="button" data-ai-mode="fast" class="opt">高速</button>
+        <button type="button" data-ai-mode="deep" class="opt">長考</button>
       </div>
-      <p class="text-[11px] leading-relaxed text-neutral-500">高速は 2.5〜6秒・最大4並列、長考は 12〜15秒・最大8並列で深く読みます。</p>
+      <p class="text-[11px] leading-relaxed text-neutral-500">高速は 2.5〜6秒・最大4並列、長考は 12〜15秒・最大8並列で読みます。</p>
     </div>
     <div id="aiStyleConfig" class="flex flex-col gap-1.5">
-      <label class="text-xs font-bold tracking-wider text-neutral-500">AI 棋風（重み）</label>
+      <label class="text-xs font-bold tracking-wider text-neutral-500">AI 棋風（一括）</label>
       <div class="grid grid-cols-3 gap-2" id="aiStyleBtns">
         <button type="button" data-ai-style="solid" class="opt">堅実</button>
         <button type="button" data-ai-style="balanced" class="opt">バランス</button>
         <button type="button" data-ai-style="aggressive" class="opt">攻撃的</button>
       </div>
-      <p class="text-[11px] leading-relaxed text-neutral-500">堅実は連結・守り重視、攻撃的は切断・弱石攻め重視（死に侵入・眼埋め防止は全棋風で有効）。</p>
+      <p class="text-[11px] leading-relaxed text-neutral-500">全AIへ一括適用します。各AI枠のボタンから席ごとに変えることもできます。</p>
     </div>
     <div id="onlineBox" class="p-3 bg-neutral-50 rounded-xl border border-neutral-200 flex flex-col gap-3 hidden text-xs">
       <div id="hostRoomSection" class="flex flex-col gap-1.5">

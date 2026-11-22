@@ -818,3 +818,35 @@ Build md5: `120cd1e0a60fba0be2adb56c7f0c7ac9` (`hexago-mcts/3.1.0`).
   `probe-behavior.js --assert` **ALL PASS**, 3rd-party dead-capture test **PASS**
   across all 3 styles (`move=-1, playouts=0`), and headless Chrome CDP UI +
   worker + `sessionStorage` reload persistence test **ALL PASS**.
+- Follow-up refinements (UI + no-prisoners + endgame pass / anti-self-fill):
+  - **UI (`index.html`, `js/core/state.js`, `js/ui/settings.js`, `js/ai/pool.js`, `js/ui/debug.js`)**:
+    - Fixed `<header>` `HEXAGO` title centering with `grid-cols-[1fr_auto_1fr]`.
+    - Simplified speed labels to `高速` / `長考` and removed verbose style note.
+    - Added per-AI-seat style overrides (`seatStyles[1..6]`, persisted in `sessionStorage`)
+      via compact cycle buttons on each AI seat row while keeping the top bulk selector.
+    - Stopped `maybeAI()` from auto-skipping `G.phase === 'dead'` in all-AI games so
+      the dead-stone confirmation phase (`#bnDead`) always appears after all active
+      players pass.
+  - **No-prisoners dead-group capture fix (`dev/ai-engine.js`)**:
+    - Added `mvCapLive` tracking whether a capture removes any live stone on `cleanBoard`.
+    - Extended Rule 4 (`cTrap < 0`) so a 2-eye defender does not capture already-smart-dead
+      enemy groups inside its own territory when `capLive === 0 && g <= 0 && enDrop <= 0`
+      (0 pts gained, avoids opening exploitable cavities), and zeroed `effCap` in `orderRootMoves`.
+  - **Endgame pass & anti-own-territory-fill fix (`dev/ai-engine.js`)**:
+    - Fixed `terminalScores()` to call `removeDeadStonesSmartImpl` directly so MCTS
+      pass-end terminal evaluations match page `detectDeadStonesSmart` scoring.
+    - Added `cRegOwnNakade` (only permits filling a 3..6pt own-only pocket when the
+      bordering `<2`-eye group has 0 outside liberties and touches enemies, with `passes === 0`).
+      All other `< LIVE_MIN_2EYE`, narrow, 2-eye-walled `< V_DEEP`, or `passes > 0`
+      zero-gain own-territory fills are excluded unconditionally in Rule 5.
+    - Added `passedMask` (active players who already declared pass in the current streak):
+      skipped in `computeEnemyThreat`; when `passEnds` (`passes + 1 >= activeCount`),
+      `enemyThreat = false`, and if strictly winning under `baseSc` (`winningOnPass`),
+      returns an instant 0-playout pass.
+    - Removed the `GUARD_MIN_VISITS` bypass for own-territory self-fills in final selection
+      and `rootMoves` export so high-visit multi-worker browser searches never leak them.
+  - **Verified**: `engine-selftest.js` **68/68**, `smart-parity.js` **42/42**,
+    `probe-behavior.js --time 300 --assert` **ALL PASS** (including new Probes I1, I2,
+    J1, J2, J3 across all 3 styles), 3P 13-board self-play (0 eye fills, 1/624 own fills,
+    127/127 pts settled), and headless Chrome CDP verification of all-AI dead-stone phase,
+    header centering, clean labels, and per-seat style persistence.

@@ -268,6 +268,7 @@
     var mvStab = new Uint8Array(n);                   // 1 = adjacent own group has <= 2 liberties
     var mvHopeless = new Uint8Array(n);               // 1 = provably hopeless (own eye / smart-dead / living-enemy dead invasion / settled own fill)
     var mvDiesImm = new Uint8Array(n);                // 1 = newly placed stone removed immediately by detectDeadStonesSmart
+    var mvCapLive = new Uint8Array(n);                // 1 = captures at least one enemy stone that was alive on cleanBoard
     var mvEnemyDrop = new Int16Array(n);              // max opponent score drop caused by move under smart scoring
     var cleanBoard = new Int8Array(n);                // srcBoard after smart dead-stone removal
     var cRegId = new Int32Array(n);                   // empty region id on cleanBoard (-1 for live stone)
@@ -278,6 +279,7 @@
     var cRegBorderAllAlive = new Uint8Array(n + 8);   // 1 = every bordering stone has >= 2 eyes independent of this region
     var cRegBorderHas1Eye = new Uint8Array(n + 8);    // 1 = every bordering stone has >= 1 eye independent of this region
     var cRegTrappedFor = new Int8Array(n + 8);        // colour trapped inside a 2-eye enemy pocket too small to live
+    var cRegOwnNakade = new Uint8Array(n + 8);        // 1 = 3..6pt own-only pocket whose bordering group has 0 outside libs & touches enemies (nakade vital)
     var cRegCount = 0;
     var cleanGid = new Int32Array(n);
     var cleanLibs = new Int16Array(n);
@@ -486,6 +488,7 @@
         cRegBorderAllAlive[rid] = mask !== 0 ? 1 : 0;
         cRegBorderHas1Eye[rid] = mask !== 0 ? 1 : 0;
         cRegTrappedFor[rid] = 0;
+        cRegOwnNakade[rid] = 0;
         rid++;
       }
       cRegCount = rid;
@@ -534,6 +537,37 @@
           if (otherOwn < 2 && otherEyes < 2) cRegBorderAllAlive[r0] = 0;
           if (otherOwn < 1 && otherEyes < 1) cRegBorderHas1Eye[r0] = 0;
         }
+      }
+
+      // Detect genuine nakade emergencies: a 3..6pt single-colour empty pocket
+      // whose bordering group has < 2 eyes, < 2 own regions, ZERO liberties
+      // outside this pocket, and touches enemy stones (completely surrounded).
+      for (var nRid = 0; nRid < cRegCount; nRid++) {
+        if (cRegColCnt[nRid] !== 1 || cRegBorderAllAlive[nRid] || cRegSize[nRid] < 3 || cRegSize[nRid] > 6) continue;
+        var seenNG = ++cleanRegSeenId;
+        var nakadeNeed = 0;
+        for (i = 0; i < n && !nakadeNeed; i++) {
+          if (cRegId[i] !== nRid) continue;
+          for (j = nbOff[i], je = nbOff[i + 1]; j < je && !nakadeNeed; j++) {
+            t = nbFlat[j];
+            var nc = srcBoard[t];
+            if (nc === 0 || cleanRegSeen[t] === seenNG) continue;
+            if (cleanEyes[t] >= 2 || cleanOwnRegs[t] >= 2) continue;
+            var ngid = cleanGid[t];
+            var hasOutLib = false, touchesEn = false;
+            for (var qn2 = 0; qn2 < n; qn2++) {
+              if (cleanGid[qn2] !== ngid) continue;
+              cleanRegSeen[qn2] = seenNG;
+              for (var jn2 = nbOff[qn2], jen2 = nbOff[qn2 + 1]; jn2 < jen2; jn2++) {
+                var un2 = nbFlat[jn2], uv2 = srcBoard[un2];
+                if (uv2 === 0) { if (cRegId[un2] !== nRid) hasOutLib = true; }
+                else if (uv2 !== nc) touchesEn = true;
+              }
+            }
+            if (!hasOutLib && touchesEn) nakadeNeed = 1;
+          }
+        }
+        cRegOwnNakade[nRid] = nakadeNeed;
       }
 
       // Detect trapped 0-eye stones sitting inside a 2-eye living enemy pocket
@@ -717,7 +751,7 @@
     // rescues/stabilizes own weak groups, or attacks/threatens an enemy group.
     // Invasions of small or supportless enemy regions are dead stones -> gain 0.
     // Legacy v2 classification is kept under opts.gainPolicy=false for A/B.
-    function classifyRootMoves(legal, turn) {
+    function classifyRootMoves(legal, turn, passes, passedMask) {
       computeTerritory(srcBoard, pcCur);
       var ownWeak = false;
       if (GAIN_POLICY) {
@@ -805,6 +839,7 @@
             if (cleanBoard[sc2] !== 0 && cleanBoard[sc2] !== turn && cleanLibs[sc2] === 1) { capLive = 1; break; }
           }
         }
+        mvCapLive[mv] = capLive;
 
         // Hopeless-move classification (unconditionally excluded from root
         // candidates and multi-worker rootMoves across ALL styles & budgets so
@@ -837,21 +872,34 @@
         } else if (anyEnemyOnly && !inv && cAlive && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
           // Rule 3b: multi-enemy pocket whose bordering walls ALL have 2 eyes
           if (cSize < LIVE_MIN_TINY || cWide < 2 || libs < 3) hopeless = 1;
-        } else if (cTrap !== 0 && rootCap[mv] === 0 && !saveOwn && !nearWeakEn) {
+        } else if (cTrap !== 0 && !saveOwn && !nearWeakEn) {
           // Rule 4: trapped 0-eye stones inside a 2-eye living enemy pocket:
           // - If turn === Math.abs(cTrap): turn is the trapped invader -> never pile more dead stones!
           // - If cTrap < 0 (already smart-dead on cleanBoard) and turn !== -cTrap:
-          //   turn is the 2-eye defender -> no need to waste moves killing already-dead stones!
-          if (turn === Math.abs(cTrap)) hopeless = 1;
-          else if (cTrap < 0 && g <= 0 && enDrop <= 0) hopeless = 1;
+          //   turn is the 2-eye defender -> NO prisoners in HEXAGO, so capturing
+          //   an already-dead group gains 0 points AND opens an empty hole that
+          //   opponents could exploit! Forbid both non-capture fills and
+          //   capturing dead multi-stone groups / dead stones in >=2pt pockets.
+          if (turn === Math.abs(cTrap) && rootCap[mv] === 0) hopeless = 1;
+          else if (cTrap < 0 && capLive === 0 && g <= 0 && enDrop <= 0 && (rootCap[mv] === 0 || cSize >= 2 || rootCap[mv] >= 2)) hopeless = 1;
         } else if (ownSrcOnly && rootCap[mv] === 0 && g <= 0 && enDrop <= 0 && !saveOwn && !stabOwn) {
-          // Rule 5: own settled territory — ONLY forbid when our bordering wall
-          // already has 2 eyes (or no enemies exist on the board, or pocket <= 2 pts
-          // where filling cannot create 2 eyes). Never blocks a <2-eye group from
-          // splitting a 4..10pt space into 2 eyes!
-          if (!hasAnyEnemy && cSize < LIVE_MIN_TINY) hopeless = 1;
-          else if (cAlive && (cSize < LIVE_MIN_2EYE || cWide < 2)) hopeless = 1;
+          // Rule 5: own settled territory — in HEXAGO (detectDeadStonesSmart), any
+          // group touching an own-only empty region is ALREADY alive at scoring,
+          // and filling inside own territory gains 0 points.
+          // - If another player already declared pass (`passes > 0`), NEVER
+          //   pre-emptively fill own territory (answer only if actually invaded).
+          // - Any <= 2pt space or < LIVE_MIN_2EYE space (too small for any enemy
+          //   invasion to live) is hopeless UNLESS it is a genuine surrounded
+          //   3..6pt nakade emergency (`cRegOwnNakade[rid]`).
+          // - Narrow (`cWide < 3`) or 2-eye-walled `< V_DEEP` own pockets are
+          //   also hopeless (defender trivially kills any invasion on reply).
+          if (passes > 0) hopeless = 1;
+          else if (!hasAnyEnemy && cSize < V_DEEP) hopeless = 1;
           else if (cSize <= 2) hopeless = 1;
+          else if (cSize < LIVE_MIN_2EYE) {
+            if (!(cSize <= 6 && !cAlive && cRegOwnNakade[rid])) hopeless = 1;
+          } else if (cWide < 3) hopeless = 1;
+          else if (cAlive && cSize < Math.max(LIVE_MIN_2EYE + 6, V_DEEP)) hopeless = 1;
         }
 
         mvHopeless[mv] = hopeless;
@@ -859,14 +907,14 @@
         mvViable[mv] = viable;
         if (hopeless) g = 0;
         ownGain[mv] = g;
-        // Useful: anything non-hopeless that can move the score, fight, save, or make eyes
+        // Useful: anything non-hopeless that can move the score, fight, save, or defend nakade
         useful = !hopeless && (
           g > 0 || enDrop > 0 || rootCap[mv] > 0 ||
           (saveOwn && libs >= 2) ||
           (stabOwn && libs >= 2) ||
           (cCnt >= 2 && libs >= 2) ||
           (!ownSrcOnly && !anyEnemyOnly && libs >= 2) ||
-          (ownSrcOnly && !cAlive && hasAnyEnemy && cSize >= 3 && libs >= 2) ||
+          (ownSrcOnly && cSize <= 6 && cRegOwnNakade[rid] && libs >= 2) ||
           (inv && !cAlive && libs >= 2)
         );
         if (eye && rootCap[mv] === 0) useful = false;
@@ -875,43 +923,69 @@
         atkB[mv] = (ATK_ORDER && !hopeless) ? ((atkBonusAt(mv, turn) * ATK_SCALE) | 0) : 0;
         if (useful) noUsefulRoot = false;
       }
-      if (GAIN_POLICY) computeEnemyThreat(turn, pcCur, ownWeak);
+      if (GAIN_POLICY) computeEnemyThreat(turn, pcCur, ownWeak, passes, passedMask);
       return noUsefulRoot;
     }
 
-    // Can any active opponent still change the score? (blocks the pass gate)
-    function computeEnemyThreat(turn, pc, ownWeak) {
-      // Check if we have any <2-eye weak group when opponents exist
-      var liveOwnWeak = false, hasLiveEnemy = false, i;
-      for (i = 0; i < n; i++) if (srcBoard[i] !== 0 && srcBoard[i] !== turn) { hasLiveEnemy = true; break; }
-      if (hasLiveEnemy) {
-        for (i = 0; i < n; i++) {
-          if (srcBoard[i] === turn && cleanLibs[i] <= 2 && cleanEyes[i] < 2 && cleanOwnRegs[i] < 2 && cleanBoard[i] === turn) {
-            liveOwnWeak = true; break;
-          }
-        }
-      }
+    // Can any active non-passed opponent still change the score? (blocks the pass gate)
+    var realDameRoot = false;
+    function computeEnemyThreat(turn, pc, ownWeak, passes, passedMask) {
       // Real dame: 2+-colour region on srcBoard that is NOT a trapped-in-2-eye-pocket dead region
       var realDame = false;
       for (var rIdx = 0; rIdx < cRegCount; rIdx++) {
         if (cRegColCnt[rIdx] >= 2 && cRegTrappedFor[rIdx] === 0) { realDame = true; break; }
       }
+      realDameRoot = realDame;
+      // If all other active players have ALREADY declared pass, passing right now
+      // ends the game immediately — opponents have zero remaining turns to invade
+      // or attack us.
+      if (passes + 1 >= activeCount) {
+        enemyThreat = false;
+        return;
+      }
+      // Check if we have any <2-eye weak group adjacent to an unpassed opponent threat
+      var liveOwnWeak = false, hasLiveEnemy = false, i;
+      for (i = 0; i < n; i++) {
+        var vc = srcBoard[i];
+        if (vc !== 0 && vc !== turn && !(passedMask & (1 << vc))) { hasLiveEnemy = true; break; }
+      }
+      if (hasLiveEnemy) {
+        for (i = 0; i < n; i++) {
+          if (srcBoard[i] === turn && cleanLibs[i] <= 2 && cleanEyes[i] < 2 && cleanOwnRegs[i] < 2 && cleanBoard[i] === turn) {
+            // Only weak if at least one liberty lies outside an own-only pocket or an enemy touches this group
+            var touchesMixedOrEn = false;
+            for (var jw = nbOff[i], jew = nbOff[i + 1]; jw < jew; jw++) {
+              var uw = nbFlat[jw], uvc = srcBoard[uw];
+              if (uvc !== 0 && uvc !== turn) { touchesMixedOrEn = true; break; }
+              if (uvc === 0) {
+                var rw = cRegId[uw];
+                if (rw >= 0 && (cRegColCnt[rw] >= 2 || !(cRegMask[rw] & (1 << turn)))) { touchesMixedOrEn = true; break; }
+              }
+            }
+            if (touchesMixedOrEn) { liveOwnWeak = true; break; }
+          }
+        }
+      }
       enemyThreat = liveOwnWeak || realDame;
       if (enemyThreat) return;
+      // Only a genuinely vast open own-bordered area (e.g. early-game empty board)
+      // forces us to keep playing when no dame or weak groups remain; normal sealed
+      // endgame territories should allow passing (if someone invades, we answer next turn).
+      var hugeOwnThresh = Math.max(V_DEEP, (n * 0.40) | 0);
       var e, j, je, libs;
       for (e = 1; e <= pc && !enemyThreat; e++) {
-        if (e === turn || outFlags[e]) continue;
+        if (e === turn || outFlags[e] || (passedMask & (1 << e))) continue;
         fillColorNear(srcBoard, e, 4);
         for (i = 0; i < n; i++) {
           if (srcBoard[i] !== 0) continue;
           var r0 = cRegId[i];
           if (r0 < 0 || cRegColCnt[r0] !== 1 || !(cRegMask[r0] & (1 << turn))) continue;
-          var minSz = cRegBorderAllAlive[r0] ? LIVE_MIN_2EYE : LIVE_MIN_TINY;
-          if (cRegSize[r0] < minSz || cRegWide[r0] < (cRegBorderAllAlive[r0] ? 3 : 2)) continue;
+          if (cRegSize[r0] < hugeOwnThresh || cRegWide[r0] < 3) continue;
           libs = 0;
           for (j = nbOff[i], je = nbOff[i + 1]; j < je; j++) if (srcBoard[nbFlat[j]] === 0) libs++;
-          if (libs < 3) continue;
-          if (enemyNear[i] <= 3 || (cRegSize[r0] >= V_DEEP && libs >= 4)) { enemyThreat = true; break; }
+          if (libs < 4) continue;
+          enemyThreat = true;
+          break;
         }
       }
     }
@@ -1381,8 +1455,11 @@
           sc = passEnds ? 1e7 : (passGate ? 1e6 : -1e9);
         } else {
           save = mvSave[mv];
+          // Do not reward capturing stones that are ALREADY dead under smart scoring
+          // with zero score gain (no prisoners in HEXAGO; killing them only opens holes).
+          var effCap = (GAIN_POLICY && rootCap[mv] > 0 && !mvCapLive[mv] && ownGain[mv] <= 0 && mvEnemyDrop[mv] <= 0) ? 0 : rootCap[mv];
           if (GAIN_POLICY) {
-            sc = ownGain[mv] * GAIN_W + rootCap[mv] * 40 + save * 140 + atkB[mv] + rootPat[mv];
+            sc = ownGain[mv] * GAIN_W + effCap * 40 + save * 140 + atkB[mv] + rootPat[mv];
             inv = terrColorCount[mv] > 0 && !(terrColMask[mv] & (1 << turn));
           } else {
             sc = rootCap[mv] * 1000 + save * 140 + rootPat[mv];
@@ -1404,14 +1481,14 @@
           var pRate = 0.50, pN = 0;
           if (USE_PRIOR) {
             pN = 5;
-            if (rootCap[mv] > 0) { pRate += 0.16 * (STYLE === 'aggressive' ? 1.15 : 1.0); pN = 7; }
+            if (effCap > 0) { pRate += 0.16 * (STYLE === 'aggressive' ? 1.15 : 1.0); pN = 7; }
             if (save > 0) { pRate += 0.14 * CONN_PRIOR; pN = 7; }
             if (rootPat[mv] >= 90) pRate += 0.10 * CONN_PRIOR;
             else if (rootPat[mv] >= 55) pRate += 0.06 * CONN_PRIOR;
             else if (rootPat[mv] >= 25) pRate += 0.02 * CONN_PRIOR;
             if (atkB[mv] > 400) pRate += 0.06 * ATK_SCALE;
             if (rootLibs[mv] === 1 && rootCap[mv] === 0) { pRate = 0.15; pN = 8; }
-            if (isOwnSettled && terrSize[mv] < V_MIN) { pRate = 0.12; pN = 8; }
+            if (isOwnSettled && !(cRegId[mv] >= 0 && cRegOwnNakade[cRegId[mv]])) { pRate = 0.12; pN = 8; }
             if (GAIN_POLICY && terrColorCount[mv] === 1 && !(terrColMask[mv] & (1 << turn)) && !mvViable[mv]) { pRate = 0.18; pN = 7; }
           }
 
@@ -2022,7 +2099,7 @@
 
     function terminalScores(board) {
       dsBoard.set(board);
-      removeDeadStonesSmart(dsBoard, pcCur);
+      removeDeadStonesSmartImpl(dsBoard, pcCur);
       scoreBoardInto(dsBoard, scoreScratch, pcCur);
       var t = new Int16Array(pcCur + 1);
       t.set(scoreScratch.subarray(0, pcCur + 1));
@@ -2114,14 +2191,35 @@
       var legalMark = new Uint8Array(n);
       for (i = 0; i < legal.length; i++) if (legal[i] >= 0) legalMark[legal[i]] = 1;
       buildGlobalCandidates();
-      var noUseful = classifyRootMoves(legal, turn);
+      // Identify active players who already declared pass in the current streak.
+      var passedMask = 0;
+      if (passes > 0 && activeCount > 1) {
+        var prevP = turn;
+        for (var pp = 0; pp < passes && pp < activeCount - 1; pp++) {
+          do { prevP = prevP === 1 ? pc : prevP - 1; } while (outFlags[prevP]);
+          passedMask |= (1 << prevP);
+        }
+      }
+      var noUseful = classifyRootMoves(legal, turn, passes, passedMask);
       var passEnds = passes + 1 >= activeCount;
 
-      // First-class pass (v2.1 gain policy): the engine passes exactly when
-      // nobody's score can move any more - no own gain AND no opponent threat
-      // (dame left / our regions invadable / our groups weak).  It never passes
-      // while dame or profitable plays remain, and never fills instead.
-      var passGate = GAIN_POLICY ? (noUsefulRoot && !enemyThreat) : noUsefulRoot;
+      // First-class pass (v2.1+ gain policy):
+      // 1) Pass immediately when nobody's score can move any more (noUsefulRoot && !enemyThreat).
+      // 2) If ALL other active players have ALREADY declared pass (`passEnds`) and
+      //    we are ALREADY strictly winning under exact smart scoring (`baseSc`),
+      //    passing right now ends the game and locks in a 100% guaranteed win —
+      //    no reason to keep filling or playing out settled/dame moves.
+      var winningOnPass = false;
+      if (GAIN_POLICY && passEnds) {
+        var bestOtherBase = -32768;
+        for (var oe = 1; oe <= pc; oe++) {
+          if (oe !== turn && !outFlags[oe] && baseSc[oe] > bestOtherBase) bestOtherBase = baseSc[oe];
+        }
+        if (baseSc[turn] > bestOtherBase && (!realDameRoot || stoneCountRoot >= Math.max(12, (n * 0.20) | 0))) {
+          winningOnPass = true;
+        }
+      }
+      var passGate = GAIN_POLICY ? ((noUsefulRoot && !enemyThreat) || winningOnPass) : noUsefulRoot;
       var allowPass = passEnds || passGate || legal.length <= 1;
 
       // Root search candidates: exclude ALL provably hopeless moves (own eyes,
@@ -2500,13 +2598,14 @@
         }
         move = bestNoEye !== null ? bestNoEye.move : -1;
       }
-      // Never fill own settled territory (small/uninvadable unconditionally,
-      // larger own regions below GUARD_MIN_VISITS) and never return a 100%-dead
-      // invasion below GUARD_MIN_VISITS while a better search candidate exists.
+      // Never fill own settled territory when a non-own-fill candidate exists
+      // (unconditional on root.n so high-visit multi-worker searches in fast/deep
+      // browser modes never leak own-territory self-fills), and never return a
+      // 100%-dead invasion below GUARD_MIN_VISITS while a better candidate exists.
       if (move >= 0 && rootCap[move] === 0 && !mvStab[move] && mvSave[move] === 0) {
-        var isOwnReg = terrColorCount[move] === 1 && (terrColMask[move] & (1 << turn));
-        var badSmallOwn = isOwnReg && terrSize[move] < V_MIN;
-        var badSelf = badSmallOwn || (root.n < GUARD_MIN_VISITS && isOwnReg);
+        var isOwnReg = terrColorCount[move] === 1 && (terrColMask[move] & (1 << turn)) && !(cRegId[move] >= 0 && cRegOwnNakade[cRegId[move]]);
+        var badSmallOwn = isOwnReg && (terrSize[move] < LIVE_MIN_2EYE || passes > 0);
+        var badSelf = isOwnReg && ownGain[move] <= 0 && mvEnemyDrop[move] <= 0;
         var badInv = root.n < GUARD_MIN_VISITS && GAIN_POLICY && terrColorCount[move] === 1 &&
           !(terrColMask[move] & (1 << turn)) && !mvViable[move];
         if ((badSelf || badInv) && root.children) {
@@ -2516,15 +2615,15 @@
             if (cg.move < 0 || cg.n <= 0) continue;
             if (rootCap[cg.move] === 0 && ownEyeAt(srcBoard, cg.move, turn)) continue;
             if (rootCap[cg.move] === 0 && !mvStab[cg.move] && mvSave[cg.move] === 0) {
-              var cgOwn = terrColorCount[cg.move] === 1 && (terrColMask[cg.move] & (1 << turn));
-              if (cgOwn && (cgOwn && terrSize[cg.move] < V_MIN || root.n < GUARD_MIN_VISITS)) continue;
+              var cgOwn = terrColorCount[cg.move] === 1 && (terrColMask[cg.move] & (1 << turn)) && !(cRegId[cg.move] >= 0 && cRegOwnNakade[cRegId[cg.move]]);
+              if (cgOwn && ownGain[cg.move] <= 0 && mvEnemyDrop[cg.move] <= 0) continue;
               if (root.n < GUARD_MIN_VISITS && GAIN_POLICY && terrColorCount[cg.move] === 1 &&
                 !(terrColMask[cg.move] & (1 << turn)) && !mvViable[cg.move]) continue;
             }
             if (bestGood === null || cg.n > bestGood.n) bestGood = cg;
           }
           if (bestGood !== null) move = bestGood.move;
-          else if (badSmallOwn) move = -1;
+          else if (badSmallOwn || (badSelf && allowPass)) move = -1;
         }
       }
       // Safety: never return an illegal placement.
@@ -2552,8 +2651,8 @@
           if (rc0.n <= 0 || rc0.move < 0) continue;
           if (rootCap[rc0.move] === 0 && ownEyeAt(srcBoard, rc0.move, turn)) continue;
           if (rootCap[rc0.move] === 0 && !mvStab[rc0.move] && mvSave[rc0.move] === 0) {
-            var rcOwn = terrColorCount[rc0.move] === 1 && (terrColMask[rc0.move] & (1 << turn));
-            if (rcOwn && (terrSize[rc0.move] < V_MIN || (root.n < GUARD_MIN_VISITS))) continue;
+            var rcOwn = terrColorCount[rc0.move] === 1 && (terrColMask[rc0.move] & (1 << turn)) && !(cRegId[rc0.move] >= 0 && cRegOwnNakade[cRegId[rc0.move]]);
+            if (rcOwn && ownGain[rc0.move] <= 0 && mvEnemyDrop[rc0.move] <= 0) continue;
           }
           hasUnguardedRM = true;
           break;
@@ -2566,8 +2665,8 @@
           if (rmc.move >= 0 && hasUnguardedRM) {
             if (rootCap[rmc.move] === 0 && ownEyeAt(srcBoard, rmc.move, turn)) continue;
             if (rootCap[rmc.move] === 0 && !mvStab[rmc.move] && mvSave[rmc.move] === 0) {
-              var rmOwn = terrColorCount[rmc.move] === 1 && (terrColMask[rmc.move] & (1 << turn));
-              if (rmOwn && (terrSize[rmc.move] < V_MIN || (root.n < GUARD_MIN_VISITS))) continue;
+              var rmOwn = terrColorCount[rmc.move] === 1 && (terrColMask[rmc.move] & (1 << turn)) && !(cRegId[rmc.move] >= 0 && cRegOwnNakade[cRegId[rmc.move]]);
+              if (rmOwn && ownGain[rmc.move] <= 0 && mvEnemyDrop[rmc.move] <= 0) continue;
             }
           }
           rootMoves.push({

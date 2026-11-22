@@ -2,8 +2,6 @@
 
 六角形の盤で打つ囲碁風ゲームです。ビルド不要の静的アプリで、`index.html` を HTTP で配信するだけで動きます（ローカル対戦・PeerJS によるオンライン対戦・写真からの盤面復元）。
 
-**公開URL:** https://sas-news.github.io/hexago/
-
 ## 遊び方
 
 ```bash

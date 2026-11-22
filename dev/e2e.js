@@ -268,11 +268,18 @@ function check(name, ok, detail) {
   const seatSwitch = await page.evaluate(async () => {
     const d = window.__hexagoDebug;
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const quickSeat = seat => document.querySelector('#quickSeats [data-seat-toggle="' + seat + '"]');
+    const seatBtn = (seat, mode) => {
+      document.getElementById('btnOpenSettings').click();
+      const row = document.querySelectorAll('#seatBtns > div')[seat - 1];
+      const btns = row ? row.querySelectorAll('button') : [];
+      const b = mode === 'ai' ? btns[1] : btns[0];
+      if (b) b.click();
+      document.getElementById('btnCloseSettings').click();
+    };
     const legalMove = () => { for (let i = 0; i < d.state().board.length; i++) if (!d.state().board[i] && d.sim(i)) return i; return -1; };
     d.setAllHuman();
     document.querySelector('#playerCountBtns [data-count="2"]')?.click();
-    document.querySelector('#aiLevelBtns [data-ai="weak"]')?.click();
+    d.setAIBudgetMs(400);
     d.newGame(9);
     await sleep(100);
     const out = {};
@@ -281,10 +288,8 @@ function check(name, ok, detail) {
     await sleep(100);
     out.turnAfterP1 = d.state().turn;
     out.p2HumanBefore = d.mine();
-    out.quickVisible = !document.getElementById('quickSeats').classList.contains('hidden');
-    out.quickButtons = document.querySelectorAll('#quickSeats [data-seat-toggle]').length;
-    // p2 human -> AI mid-game via the in-game quick toggle
-    quickSeat(2).click();
+    // p2 human -> AI mid-game via settings modal
+    seatBtn(2, 'ai');
     await sleep(50);
     out.aiSeat2 = d.seats()[2] === 'ai';
     out.p2AIMine = d.mine();
@@ -292,8 +297,8 @@ function check(name, ok, detail) {
     while (Date.now() - t0 < 8000 && d.state().board.filter(Boolean).length < 2) await sleep(100);
     out.stonesAfterAI = d.state().board.filter(Boolean).length;
     out.turnAfterAI = d.state().turn;
-    // AI -> human mid-game via the same quick toggle
-    quickSeat(2).click();
+    // AI -> human mid-game
+    seatBtn(2, 'human');
     await sleep(100);
     out.humanSeat2Again = d.seats()[2] === 'human';
     out.turnNowMine = d.mine();
@@ -306,7 +311,6 @@ function check(name, ok, detail) {
     out.stonesAfterHuman = d.state().board.filter(Boolean).length;
     return out;
   });
-  check('quick seat toggles are visible in game', seatSwitch.quickVisible === true && seatSwitch.quickButtons === 2, 'buttons=' + seatSwitch.quickButtons);
   check('mid-game human -> AI switch makes AI play', seatSwitch.aiSeat2 && seatSwitch.p2AIMine === false && seatSwitch.stonesAfterAI >= 2 && seatSwitch.turnAfterAI === 1, JSON.stringify(seatSwitch));
   check('mid-game AI -> human switch gives control back', seatSwitch.humanSeat2Again && seatSwitch.turnNowMine === true && seatSwitch.p1Second && seatSwitch.p2HumanMine === true && seatSwitch.p2HumanMove === true, 'stones=' + seatSwitch.stonesAfterHuman);
 
@@ -314,15 +318,22 @@ function check(name, ok, detail) {
   const cancelSwitch = await page.evaluate(async () => {
     const d = window.__hexagoDebug;
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const quickSeat = seat => document.querySelector('#quickSeats [data-seat-toggle="' + seat + '"]');
+    const seatBtn = (seat, mode) => {
+      document.getElementById('btnOpenSettings').click();
+      const row = document.querySelectorAll('#seatBtns > div')[seat - 1];
+      const btns = row ? row.querySelectorAll('button') : [];
+      const b = mode === 'ai' ? btns[1] : btns[0];
+      if (b) b.click();
+      document.getElementById('btnCloseSettings').click();
+    };
     d.setAllHuman();
     d.newGame(9);
     await sleep(100);
     d.playMove(30);              // p2 turn, human
     await sleep(50);
-    quickSeat(2).click();        // start AI search (weak = 0.5s + 120ms delay)
+    seatBtn(2, 'ai');            // start AI search
     await sleep(30);
-    quickSeat(2).click();        // take the seat back mid-search
+    seatBtn(2, 'human');         // take the seat back mid-search
     await sleep(1500);
     const st = d.state();
     return { stones: st.board.filter(Boolean).length, turn: st.turn, seat2: st.seats[2], aiBusy: st.aiBusy, mine: d.mine() };

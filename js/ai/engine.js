@@ -174,13 +174,14 @@
     if (engPC > 6) engPC = 6;
 
     var STYLE = (opts.style === 'solid' || opts.style === 'aggressive') ? opts.style : 'balanced';
-    var styleUctC = STYLE === 'solid' ? 0.60 : (STYLE === 'aggressive' ? 0.85 : 0.70);
-    var styleRankBlend = STYLE === 'solid' ? 0.55 : (STYLE === 'aggressive' ? 0.82 : 0.70);
-    var ATK_SCALE = STYLE === 'solid' ? 0.55 : (STYLE === 'aggressive' ? 1.60 : 1.0);
-    var CAP_PROB = STYLE === 'solid' ? 0.88 : (STYLE === 'aggressive' ? 0.96 : 0.90);
-    var SAVE_PROB = STYLE === 'solid' ? 0.97 : (STYLE === 'aggressive' ? 0.88 : 0.92);
-    var CONN_PRIOR = STYLE === 'solid' ? 1.35 : (STYLE === 'aggressive' ? 0.85 : 1.0);
-    var LEAD_ATK = STYLE === 'solid' ? 1.15 : (STYLE === 'aggressive' ? 1.50 : 1.25);
+    var styleUctC = STYLE === 'solid' ? 0.58 : (STYLE === 'aggressive' ? 0.88 : 0.70);
+    var styleRankBlend = STYLE === 'solid' ? 0.50 : (STYLE === 'aggressive' ? 0.90 : 0.70);
+    var styleMargin2P = STYLE === 'solid' ? 0.14 : (STYLE === 'aggressive' ? 0.00 : 0.04);
+    var ATK_SCALE = STYLE === 'solid' ? 0.40 : (STYLE === 'aggressive' ? 2.00 : 1.0);
+    var CAP_PROB = STYLE === 'solid' ? 0.85 : (STYLE === 'aggressive' ? 0.98 : 0.90);
+    var SAVE_PROB = STYLE === 'solid' ? 0.98 : (STYLE === 'aggressive' ? 0.82 : 0.92);
+    var CONN_PRIOR = STYLE === 'solid' ? 1.60 : (STYLE === 'aggressive' ? 0.70 : 1.0);
+    var LEAD_ATK = STYLE === 'solid' ? 1.10 : (STYLE === 'aggressive' ? 1.85 : 1.25);
 
     var UCT_C = opts.uctC != null ? +opts.uctC : styleUctC;
     var RAVE_B = opts.raveB != null ? +opts.raveB : 0.04;
@@ -188,7 +189,7 @@
     var PW_K0 = opts.pwK0 != null ? +opts.pwK0 : 8;
     var PW_K1 = opts.pwK1 != null ? +opts.pwK1 : 2.5;
     var USE_PRIOR = opts.usePrior !== false;
-    var MARGIN_2P = opts.margin2p != null ? +opts.margin2p : 0.04;
+    var MARGIN_2P = opts.margin2p != null ? +opts.margin2p : styleMargin2P;
     var TREE_REUSE = opts.treeReuse !== false;
     var RANK_BLEND = opts.rankBlend != null ? Math.max(0, Math.min(1, +opts.rankBlend)) : styleRankBlend;
     var RAVE_K = opts.raveK != null ? +opts.raveK : 1000;
@@ -287,10 +288,11 @@
     var cleanGSize = new Int16Array(n);
     var cleanRegSeen = new Int32Array(n + 8), cleanRegSeenId = 0;
     var cleanDameExists = false;
-    var LIVE_MIN_2EYE = (n <= 80 ? 11 : 15) + (STYLE === 'solid' ? 3 : 0); // min empty space to realistically live inside a 2-eye enemy wall
-    var LIVE_MIN_TINY = (n <= 80 ? 9 : 11) + (STYLE === 'solid' ? 2 : 0);  // min empty space inside solid enemy wall without weak enemy groups
+    var LIVE_MIN_2EYE = (n <= 80 ? 11 : 15) + (STYLE === 'solid' ? 5 : (STYLE === 'aggressive' ? -1 : 0)); // min empty space to realistically live inside a 2-eye enemy wall
+    var LIVE_MIN_TINY = (n <= 80 ? 9 : 11) + (STYLE === 'solid' ? 3 : 0);  // min empty space inside solid enemy wall without weak enemy groups
     var rootPriorW = new Float64Array(n);             // virtual prior win-sum per root move
     var rootPriorN = new Float64Array(n);             // virtual prior visit count per root move
+    var rootStyleBias = new Float64Array(n);          // persistent bounded tactical value bias per style (0 for balanced)
     var ownNear = new Int16Array(n);                  // hex distance to nearest own stone at root
     var rootOwnCount = 0;                             // number of own stones on root board
     var atkW = new Float64Array(8);                   // per-colour attack weight (multiplayer: hit the leader)
@@ -1464,9 +1466,33 @@
             sc = rootCap[mv] * 1000 + save * 140 + rootPat[mv];
           }
           own = 0; opp = 0;
+          var ownM0 = 0, enM0 = 0;
           for (j = nbOff[mv], je = nbOff[mv + 1]; j < je; j++) {
             v = srcBoard[nbFlat[j]];
-            if (v === turn) own++; else if (v !== 0) opp++;
+            if (v === 0) continue;
+            var d0 = nbDirFlat[j];
+            if (v === turn) { own++; ownM0 |= (1 << d0); } else { opp++; enM0 |= (1 << d0); }
+          }
+          var ownConn = 0, enCut = 0;
+          if (STYLE !== 'balanced') {
+            var mm1 = ownM0, mm2, bb1, bb2, cd0;
+            while (mm1) {
+              bb1 = mm1 & -mm1; mm1 ^= bb1; mm2 = mm1;
+              while (mm2) {
+                bb2 = mm2 & -mm2; mm2 ^= bb2;
+                cd0 = cycDiff(BITIDX[bb1], BITIDX[bb2]);
+                if (cd0 === 2) ownConn += 2; else if (cd0 === 3) ownConn += 1;
+              }
+            }
+            mm1 = enM0;
+            while (mm1) {
+              bb1 = mm1 & -mm1; mm1 ^= bb1; mm2 = mm1;
+              while (mm2) {
+                bb2 = mm2 & -mm2; mm2 ^= bb2;
+                cd0 = cycDiff(BITIDX[bb1], BITIDX[bb2]);
+                if (cd0 === 3) enCut += 2; else if (cd0 === 2) enCut += 1;
+              }
+            }
           }
           sc += own * 4 + opp * 3;
           eye = ownEyeAt(srcBoard, mv, turn);
@@ -1480,7 +1506,7 @@
           var pRate = 0.50, pN = 0;
           if (USE_PRIOR) {
             pN = 5;
-            if (effCap > 0) { pRate += 0.16 * (STYLE === 'aggressive' ? 1.15 : 1.0); pN = 7; }
+            if (effCap > 0) { pRate += 0.16 * (STYLE === 'aggressive' ? 1.25 : 1.0); pN = 7; }
             if (save > 0) { pRate += 0.14 * CONN_PRIOR; pN = 7; }
             if (rootPat[mv] >= 90) pRate += 0.10 * CONN_PRIOR;
             else if (rootPat[mv] >= 55) pRate += 0.06 * CONN_PRIOR;
@@ -1490,6 +1516,46 @@
             if (isOwnSettled && !(cRegId[mv] >= 0 && cRegOwnNakade[cRegId[mv]])) { pRate = 0.12; pN = 8; }
             if (GAIN_POLICY && terrColorCount[mv] === 1 && !(terrColMask[mv] & (1 << turn)) && !mvViable[mv]) { pRate = 0.18; pN = 7; }
           }
+
+          // Persistent bounded style value bias (0 for balanced). Small enough never
+          // to force a blunder, strong enough to create unmistakable strategic
+          // differences even at 30k+ visits.
+          var sBias = 0;
+          if (STYLE === 'solid') {
+            if (save > 0) sBias += 0.030;
+            if (mvStab[mv]) sBias += 0.024;
+            if (ownConn >= 2) sBias += 0.030;
+            else if (ownConn === 1) sBias += 0.016;
+            if (own >= 2 && rootLibs[mv] >= 3) sBias += 0.020;
+            else if (own === 1 && opp === 0 && rootLibs[mv] >= 3) sBias += 0.010;
+            if (opp >= 1 && own === 0 && effCap === 0) sBias -= 0.026;
+            if (opp >= 2 && own === 0 && effCap === 0) sBias -= 0.020;
+            if (rootLibs[mv] <= 2 && effCap === 0 && save === 0) sBias -= 0.018;
+            if (opening && rootOwnCount > 0) {
+              var dOwnS = ownNear[mv];
+              if (dOwnS === 1 || dOwnS === 2) sBias += 0.024;
+              else if (dOwnS >= 4) sBias -= 0.024;
+            }
+            if (sBias > 0.055) sBias = 0.055;
+            if (sBias < -0.055) sBias = -0.055;
+          } else if (STYLE === 'aggressive') {
+            if (effCap > 0) sBias += 0.035;
+            if (enCut >= 2) sBias += 0.036;
+            else if (enCut === 1) sBias += 0.020;
+            if (atkB[mv] > 300) sBias += 0.032;
+            else if (atkB[mv] > 0) sBias += 0.018;
+            if (opp >= 1 && rootLibs[mv] >= 2) sBias += 0.024;
+            if (inv && mvViable[mv]) sBias += 0.024;
+            if (own >= 2 && opp === 0 && save === 0 && !mvStab[mv] && effCap === 0) sBias -= 0.026;
+            if (opening && stoneCountRoot > 0) {
+              var ddA = nearestStoneDist(srcBoard, mv);
+              if (ddA === 1 || ddA === 2) sBias += 0.020;
+              if (rootOwnCount > 0 && ownNear[mv] === 1 && opp === 0) sBias -= 0.020;
+            }
+            if (sBias > 0.060) sBias = 0.060;
+            if (sBias < -0.050) sBias = -0.050;
+          }
+          rootStyleBias[mv] = sBias;
 
           if (opening) {
             dd = nearestStoneDist(srcBoard, mv);
@@ -1785,13 +1851,17 @@
       }
       if (nbMask[e] !== 0 && ownM === nbMask[e]) return -100;
       var sc = 0, m, m2, b1, b2, dd;
+      var wOwn2 = STYLE === 'solid' ? 48 : (STYLE === 'aggressive' ? 16 : 30);
+      var wOwn3 = STYLE === 'solid' ? 28 : (STYLE === 'aggressive' ? 10 : 18);
+      var wEn3 = STYLE === 'solid' ? 12 : (STYLE === 'aggressive' ? 42 : 24);
+      var wEn2 = STYLE === 'solid' ? 6 : (STYLE === 'aggressive' ? 22 : 12);
       m = ownM;
       while (m) {
         b1 = m & -m; m ^= b1; m2 = m;
         while (m2) {
           b2 = m2 & -m2; m2 ^= b2;
           dd = cycDiff(BITIDX[b1], BITIDX[b2]);
-          if (dd === 2) sc += 30; else if (dd === 3) sc += 18;
+          if (dd === 2) sc += wOwn2; else if (dd === 3) sc += wOwn3;
         }
       }
       m = enM;
@@ -1800,7 +1870,7 @@
         while (m2) {
           b2 = m2 & -m2; m2 ^= b2;
           dd = cycDiff(BITIDX[b1], BITIDX[b2]);
-          if (dd === 3) sc += 24; else if (dd === 2) sc += 12;
+          if (dd === 3) sc += wEn3; else if (dd === 2) sc += wEn2;
         }
       }
       return sc;
@@ -1868,8 +1938,13 @@
       }
       atariCount = w;
 
-      if (bestCap >= 0 && rng() < CAP_PROB) { playCommit(bestCap, p); return 1; }
-      if (bestSave >= 0 && rng() < SAVE_PROB) { playCommit(bestSave, p); return 1; }
+      if (STYLE === 'solid') {
+        if (bestSave >= 0 && rng() < SAVE_PROB) { playCommit(bestSave, p); return 1; }
+        if (bestCap >= 0 && rng() < CAP_PROB) { playCommit(bestCap, p); return 1; }
+      } else {
+        if (bestCap >= 0 && rng() < CAP_PROB) { playCommit(bestCap, p); return 1; }
+        if (bestSave >= 0 && rng() < SAVE_PROB) { playCommit(bestSave, p); return 1; }
+      }
 
       // 3. LGRF-1: try last winning reply to plyLastMove
       if (USE_LGR && lm >= 0) {
@@ -2087,6 +2162,7 @@
           var beta = rn / (rn + wn + wn * rn * rb2);
           q = (1 - beta) * q + beta * (ch.rw / rn);
         }
+        if (isRoot && ch.move >= 0) q += rootStyleBias[ch.move];
         var v = q + curC * Math.sqrt(ln / ch.n);
         if (isRoot && ch.move >= 0 && atkB[ch.move] > 2000) {
           v += Math.max(0, 1.2 - 0.025 * ch.n);

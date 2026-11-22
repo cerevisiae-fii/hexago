@@ -802,3 +802,19 @@ full, and wasted moves around already-dead stones.
   4-worker merged 3P13 games; 2P9@150ms sanity 93.8% 30W-2L vs v2.0.0).
 
 Build md5: `120cd1e0a60fba0be2adb56c7f0c7ac9` (`hexago-mcts/3.1.0`).
+
+## 15. AI v3.2 — Style weight presets (`solid` / `balanced` / `aggressive`), clean speed naming (`fast` / `deep`), unconditional 3rd-party dead-capture block (v3.2.0)
+
+- Removed the `β` label: settings modal now exposes **AI 思考時間**
+  (`高速（標準）` 2.5-6 s / 4 workers vs `長考（最強）` 12-15 s / 8 workers;
+  legacy saved `'beta'` maps cleanly to `'deep'`) and **AI 棋風（重み）**
+  (`堅実` `solid` / `バランス` `balanced` / `攻撃的` `aggressive`), persisted in
+  `sessionStorage` and wired through `pool.js` -> `worker.js` -> `createEngine({ style })`.
+- Tightened Rule 2 into Rule 2a (`diesImm && rootCap > 0 && capLive === 0 && g <= 0 && enDrop <= 0 && !saveOwn`,
+  unconditionally blocking 0-gain suicidal captures of already-smart-dead stones
+  in 3rd-party territories even when bordering walls have 3 liberties) and
+  Rule 2b (`diesImm && ownN === 0 && rootCap === 0 && !nearAtari2En`).
+- Verified: `engine-selftest.js` **68/68**, `smart-parity.js` **42/42**,
+  `probe-behavior.js --assert` **ALL PASS**, 3rd-party dead-capture test **PASS**
+  across all 3 styles (`move=-1, playouts=0`), and headless Chrome CDP UI +
+  worker + `sessionStorage` reload persistence test **ALL PASS**.

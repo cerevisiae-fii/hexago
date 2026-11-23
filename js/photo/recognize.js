@@ -378,6 +378,144 @@
     return { board: board, labels: labels, playerCount: Math.max(2, classIds.length), colors: colors, names: names };
   }
 
+  // ---------- タップした色見本（アンカー）から色閾値を自動調整して再分類 ----------
+  // sRGB (0..1) -> CIELAB (L* in 0..100, a*, b* ~ -100..100)
+  function rgbToLab(r, g, b) {
+    function lin(c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+    var rl = lin(r), gl = lin(g), bl = lin(b);
+    var x = (0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl) / 0.95047;
+    var y = (0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl) / 1.00000;
+    var z = (0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl) / 1.08883;
+    function f(t) { return t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116); }
+    var fx = f(x), fy = f(y), fz = f(z);
+    return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+  }
+  function calibVec(f) {
+    // パッチ全体の平均色 f[0,5,10] は外周リング（盤面木目）が約44%混ざるため、
+    // f[19..21] (= 外周リング - 中央8x8) を使って石本体（中央部）の色を復元する。
+    var cr = Math.max(0, Math.min(1, f[0] - 0.44 * f[19]));
+    var cg = Math.max(0, Math.min(1, f[5] - 0.44 * f[20]));
+    var cb = Math.max(0, Math.min(1, f[10] - 0.44 * f[21]));
+    var lab = rgbToLab(cr, cg, cb);
+    var ringLum = 0.299 * f[19] + 0.587 * f[20] + 0.114 * f[21];
+    // 正規化済み5次元: 石本体の L*, a*, b*（色覚均等空間） + リング輝度差 + 勾配
+    return [lab[0] / 20, lab[1] / 12, lab[2] / 12, ringLum / 0.12, f[27] / 0.15];
+  }
+  function vecDist2(a, b) {
+    var d0 = a[0] - b[0], d1 = a[1] - b[1], d2 = a[2] - b[2], d3 = a[3] - b[3], d4 = a[4] - b[4];
+    return d0 * d0 * 1.15 + d1 * d1 * 1.60 + d2 * d2 * 1.60 + d3 * d3 * 0.85 + d4 * d4 * 0.45;
+  }
+
+  // manualMap: { [pointIndex]: true } — ユーザーが手動確定した点。
+  // allowedClasses: 候補クラス番号配列（例: [0, 1, 2, 4]）。
+  // 手動確定した点はそのまま固定し、残りの点を色見本プロトタイプ距離 + 元確率で再判定する。
+  function reclassifyWithAnchors(result, labels, manualMap, allowedClasses) {
+    if (!result || !result.features || !result.points) return null;
+    var feats = result.features;
+    var N = feats.length;
+    var allowed = (allowedClasses && allowedClasses.length) ? allowedClasses.slice() : [0, 1, 2, 3, 4, 5, 6, 7];
+    if (allowed.indexOf(0) < 0) allowed.unshift(0);
+    var vecs = new Array(N);
+    for (var i = 0; i < N; i++) vecs[i] = calibVec(feats[i]);
+
+    // 1) クラスごとのアンカー集合を構築（ユーザー修正点を最優先、未修正クラスは
+    //    他クラスのユーザー見本に近い誤判定点を除外した上で自動補完）
+    var anchorsByClass = {};
+    var meanByClass = {};
+    var isUserClass = {};
+    var userAnchors = [];
+    for (var ci = 0; ci < allowed.length; ci++) anchorsByClass[allowed[ci]] = [];
+    for (i = 0; i < N; i++) {
+      if (!manualMap || !manualMap[i]) continue;
+      var c = labels[i];
+      if (!anchorsByClass[c]) anchorsByClass[c] = [];
+      anchorsByClass[c].push(vecs[i]);
+      isUserClass[c] = true;
+      userAnchors.push({ cls: c, vec: vecs[i] });
+    }
+    for (ci = 0; ci < allowed.length; ci++) {
+      var cls = allowed[ci];
+      if (anchorsByClass[cls].length > 0) continue;
+      var cands = [];
+      for (i = 0; i < N; i++) {
+        if (manualMap && manualMap[i]) continue;
+        var pt0 = result.points[i];
+        var origCls = pt0.origCls != null ? pt0.origCls : pt0.cls;
+        var origConf = pt0.origConf != null ? pt0.origConf : pt0.conf;
+        if (origCls !== cls) continue;
+        var minOtherD2 = Infinity;
+        for (var ua = 0; ua < userAnchors.length; ua++) {
+          if (userAnchors[ua].cls !== cls) {
+            var od2 = vecDist2(vecs[i], userAnchors[ua].vec);
+            if (od2 < minOtherD2) minOtherD2 = od2;
+          }
+        }
+        // 他クラスのユーザー見本とほぼ同色の点（誤判定されていた石）は種から除外
+        if (minOtherD2 < 0.35) continue;
+        cands.push({ idx: i, score: origConf + Math.min(2, minOtherD2) * 0.25 });
+      }
+      cands.sort(function (a, b) { return b.score - a.score; });
+      for (var k = 0; k < Math.min(12, cands.length); k++) anchorsByClass[cls].push(vecs[cands[k].idx]);
+    }
+    for (ci = 0; ci < allowed.length; ci++) {
+      var c2 = allowed[ci], list = anchorsByClass[c2];
+      if (!list || !list.length) continue;
+      var m = [0, 0, 0, 0, 0];
+      for (var j = 0; j < list.length; j++) {
+        for (var d = 0; d < 5; d++) m[d] += list[j][d];
+      }
+      for (d = 0; d < 5; d++) m[d] /= list.length;
+      meanByClass[c2] = m;
+    }
+
+    // 2) 各点を再分類
+    var nextLabels = labels.slice();
+    var updated = [];
+    var changedCount = 0;
+    for (i = 0; i < N; i++) {
+      var pt = result.points[i];
+      if (pt.origCls == null) { pt.origCls = pt.cls; pt.origConf = pt.conf; pt.origMargin = pt.margin; pt.origProbs = pt.probs; }
+      if (manualMap && manualMap[i]) {
+        updated.push({ cls: labels[i], conf: 1, margin: 1 });
+        continue;
+      }
+      var v = vecs[i];
+      var origP = pt.origProbs || pt.probs;
+      var rawCal = new Float64Array(8);
+      var sumCal = 0, sumOrig = 0;
+      for (ci = 0; ci < allowed.length; ci++) {
+        var cc = allowed[ci];
+        if (origP) sumOrig += origP[cc] || 0;
+        var arr = anchorsByClass[cc];
+        if (arr && arr.length) {
+          var minD2 = Infinity;
+          for (var ai = 0; ai < arr.length; ai++) {
+            var d2 = vecDist2(v, arr[ai]);
+            if (d2 < minD2) minD2 = d2;
+          }
+          var meanD2 = vecDist2(v, meanByClass[cc]);
+          var effD2 = isUserClass[cc] ? (0.55 * minD2 + 0.45 * meanD2) : meanD2;
+          var sigma2 = 0.42;
+          rawCal[cc] = Math.exp(-effD2 / (2 * sigma2));
+          sumCal += rawCal[cc];
+        }
+      }
+      var best = labels[i], bestP = -1, secondP = 0;
+      for (ci = 0; ci < allowed.length; ci++) {
+        var cc2 = allowed[ci];
+        var cp = sumCal > 1e-12 ? rawCal[cc2] / sumCal : 0;
+        var op = (origP && sumOrig > 1e-12) ? (origP[cc2] / sumOrig) : 0;
+        var p = sumCal > 1e-12 ? (0.82 * cp + 0.18 * op) : op;
+        if (p > bestP) { secondP = bestP > 0 ? bestP : 0; bestP = p; best = cc2; }
+        else if (p > secondP) { secondP = p; }
+      }
+      if (best !== nextLabels[i]) changedCount++;
+      nextLabels[i] = best;
+      updated.push({ cls: best, conf: bestP, margin: Math.max(0, bestP - secondP) });
+    }
+    return { labels: nextLabels, points: updated, changedCount: changedCount };
+  }
+
   var api = {
     CLASSES: CLASSES,
     CLASS_COLORS: CLASS_COLORS,
@@ -387,6 +525,7 @@
     autoPick: autoPick,
     classifyFeatures: classifyFeatures,
     heuristicProbs: heuristicProbs,
+    reclassifyWithAnchors: reclassifyWithAnchors,
     modelReady: modelReady,
     toGameBoard: toGameBoard
   };

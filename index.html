@@ -38,7 +38,7 @@
   <div class="w-full flex justify-center items-center relative">
     <canvas id="cv" class="w-full aspect-square cursor-pointer max-w-[520px] rounded-lg" role="img" aria-label="HEXAGO の盤面（交点をタップして着手）"></canvas>
     <div id="aiOv" class="absolute top-2 left-2 z-10 flex items-start justify-start hidden pointer-events-none">
-      <div class="bg-white/95 text-neutral-900 border border-neutral-300 px-3 py-2 rounded-full shadow-lg font-bold text-sm flex items-center gap-2"><div class="w-3.5 h-3.5 border-2 border-neutral-900 border-t-transparent rounded-full animate-spin"></div><span id="aiOvText">AI 思考中...</span></div>
+      <div class="card px-3 py-2 rounded-full shadow-lg font-bold text-sm flex items-center gap-2" style="color:var(--tx);background:var(--card);border-color:var(--bd)"><div class="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div><span id="aiOvText">AI 思考中...</span></div>
     </div>
   </div>
 
@@ -47,8 +47,6 @@
     <button id="btnPass" class="btn flex-1 py-2.5 px-4 text-xs sm:text-sm font-bold rounded-xl hover:opacity-80 active:scale-95 transition-all shadow-sm">パス</button>
     <button id="btnResign" class="flex-1 py-2.5 px-4 text-xs sm:text-sm font-bold border border-red-500/50 text-red-600 rounded-xl hover:bg-red-500/10 active:scale-95 transition-all shadow-sm">投了</button>
   </div>
-
-  <div id="quickSeats" class="hidden w-full flex-wrap items-center justify-center gap-2 text-[11px]"></div>
 
   <div id="bnDead" class="hidden w-full flex flex-col gap-2 p-3 bg-amber-50 text-amber-900 text-xs sm:text-sm rounded-xl border border-amber-200 shadow-sm">
     <div class="flex items-center justify-between font-bold"><span>⚠️ 終局・死に石確認</span><span id="deadCount" class="text-xs font-semibold opacity-80">自動判定中…</span></div>
@@ -219,14 +217,18 @@
 
     <div id="photoStep1" class="p-4 flex flex-col gap-3">
       <p class="text-xs text-neutral-600 leading-relaxed">実物の六角盤を撮影した写真を選んでください。盤全体が写っていると精度が上がります。</p>
-      <label class="w-full py-10 border-2 border-dashed border-neutral-300 rounded-xl flex flex-col items-center gap-2 cursor-pointer hover:bg-neutral-50">
-        <span class="text-3xl">📷</span>
-        <span class="font-bold text-sm">写真を選ぶ / 撮影する</span>
-        <span class="text-[11px] text-neutral-500">JPEG / PNG など</span>
-        <input id="photoFile" type="file" accept="image/*" capture="environment" class="hidden">
+      <label class="w-full py-9 border-2 border-dashed border-neutral-300 rounded-xl flex flex-col items-center gap-2 cursor-pointer hover:bg-neutral-50">
+        <span class="text-3xl">🖼️</span>
+        <span class="font-bold text-sm">写真を選ぶ（ライブラリ / ファイル）</span>
+        <span class="text-[11px] text-neutral-500">撮影済みの JPEG / PNG など</span>
+        <input id="photoFile" type="file" accept="image/*" class="hidden">
+      </label>
+      <label class="w-full py-2.5 border border-neutral-300 rounded-xl flex items-center justify-center gap-2 cursor-pointer hover:bg-neutral-50 font-bold text-sm text-neutral-700">
+        <span>📷</span>
+        <span>カメラでその場で撮影する</span>
+        <input id="photoCamera" type="file" accept="image/*" capture="environment" class="hidden">
       </label>
       <p id="photoErr" class="text-xs text-red-600 hidden"></p>
-      <div class="text-center"><button id="btnPhotoSample" class="text-xs underline opacity-60">サンプル写真で試す</button></div>
     </div>
 
     <div id="photoStep2" class="p-4 flex flex-col gap-3 hidden">
@@ -258,10 +260,26 @@
     </div>
 
     <div id="photoStep3" class="p-4 flex flex-col gap-3 hidden">
-      <div class="flex justify-center bg-neutral-900 rounded-xl overflow-hidden">
-        <canvas id="photoResult" class="touch-none"></canvas>
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <div id="photoViewBtns" class="inline-flex rounded-lg border border-neutral-300 overflow-hidden text-xs font-bold">
+          <button type="button" data-photo-view="ring" class="px-2.5 py-1 bg-neutral-900 text-white">枠で重ねる</button>
+          <button type="button" data-photo-view="split" class="px-2.5 py-1 bg-white text-neutral-700 border-l border-neutral-300">並べて比較</button>
+          <button type="button" data-photo-view="photo" class="px-2.5 py-1 bg-white text-neutral-700 border-l border-neutral-300">元写真のみ</button>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button id="btnPhotoCalibrate" type="button" disabled class="px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40 disabled:bg-neutral-300 disabled:text-neutral-600 transition-colors">修正した石で自動調整</button>
+          <button id="btnPhotoResetRead" type="button" class="text-[11px] underline text-neutral-500 hover:text-neutral-800 hidden">初期判定に戻す</button>
+        </div>
       </div>
-      <p class="text-[11px] text-neutral-500 leading-relaxed">点をタップすると「空 → 参加中の色（人数ぶん）」を巡回します。琥珀色の枠は自信が低い点です。未使用の色も使いたいときは「全色から選ぶ」をONにしてください。</p>
+      <div id="photoCanvasWrap" class="grid grid-cols-1 gap-2">
+        <div class="flex justify-center bg-neutral-900 rounded-xl overflow-hidden">
+          <canvas id="photoResult" class="touch-none"></canvas>
+        </div>
+        <div id="photoBoardWrap" class="hidden justify-center bg-neutral-900 rounded-xl overflow-hidden">
+          <canvas id="photoBoardPreview" class="touch-none"></canvas>
+        </div>
+      </div>
+      <p class="text-[11px] text-neutral-500 leading-relaxed">交点をタップすると「空 → 参加中の色」を巡回します。誤判定がある石を1〜2個タップして直してから「修正した石で自動調整」を押すと、同じ色合いの石をまとめて再判定します。</p>
       <div id="photoCounts" class="text-xs flex flex-wrap gap-x-3 gap-y-1 items-center"></div>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <label for="photoPlayerCount" class="flex items-center gap-2 font-bold text-neutral-700">人数

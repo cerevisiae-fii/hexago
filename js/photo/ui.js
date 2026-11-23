@@ -18,9 +18,10 @@
     img: null, width: 0, height: 0, imageData: null, fileName: '',
     corners: null, autoConf: 0, autoMethod: '',
     size: 13, margin: 0.577,
-    result: null, labels: null, activeSize: 13,
+    result: null, labels: null, origLabels: null, activeSize: 13,
     drag: -1, hover: -1, turn: 1, modelTried: false,
-    palette: null, playerCount: 2, allColors: false, pickPalette: null, outColors: {}
+    palette: null, playerCount: 2, allColors: false, pickPalette: null, outColors: {},
+    viewMode: 'ring', manual: {}, calibrated: false
   };
 
   // ---------------- 画面切り替え ----------------
@@ -289,6 +290,10 @@
         });
         st.result = res;
         st.labels = res.points.map(function (p) { return p.cls; });
+        st.origLabels = st.labels.slice();
+        st.manual = {};
+        st.calibrated = false;
+        st.viewMode = 'ring';
         st.activeSize = st.size;
         st.turn = 1;
         st.allColors = false;
@@ -393,12 +398,127 @@
     return { L: L, cell: L.cell, W: L.W };
   }
 
+  function manualCount() {
+    var n = 0;
+    if (!st.manual) return 0;
+    for (var k in st.manual) if (st.manual[k]) n++;
+    return n;
+  }
+
+  function syncStep3Controls() {
+    var btns = document.querySelectorAll('#photoViewBtns [data-photo-view]');
+    [].forEach.call(btns, function (b) {
+      var on = b.dataset.photoView === st.viewMode;
+      b.classList.toggle('bg-neutral-900', on);
+      b.classList.toggle('text-white', on);
+      b.classList.toggle('bg-white', !on);
+      b.classList.toggle('text-neutral-700', !on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+    var wrap = $('photoCanvasWrap');
+    var bWrap = $('photoBoardWrap');
+    if (wrap) {
+      wrap.classList.toggle('grid-cols-2', st.viewMode === 'split');
+      wrap.classList.toggle('grid-cols-1', st.viewMode !== 'split');
+    }
+    if (bWrap) {
+      bWrap.classList.toggle('hidden', st.viewMode !== 'split');
+      bWrap.classList.toggle('flex', st.viewMode === 'split');
+    }
+    var mc = manualCount();
+    var calBtn = $('btnPhotoCalibrate');
+    if (calBtn) {
+      calBtn.disabled = mc === 0;
+      calBtn.textContent = mc > 0 ? ('修正した石で自動調整 (' + mc + '点)') : '修正した石で自動調整';
+    }
+    var rstBtn = $('btnPhotoResetRead');
+    if (rstBtn) rstBtn.classList.toggle('hidden', mc === 0 && !st.calibrated);
+  }
+
+  function renderBoardPreview() {
+    var res = st.result;
+    var cv = $('photoBoardPreview');
+    if (!res || !cv || st.viewMode !== 'split') return;
+    var W = res.layout.W;
+    var fit = fitCanvas(cv, W, W, 320, 0.36);
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(fit.dpr, 0, 0, fit.dpr, 0, 0);
+    var scale = fit.cssW / W;
+    // 盤面背景＋外枠＋格子線
+    ctx.fillStyle = '#d9b382';
+    ctx.fillRect(0, 0, fit.cssW, fit.cssH);
+    var L = res.layout;
+    ctx.beginPath();
+    for (var c = 0; c < 6; c++) {
+      var cc = L.corners[c];
+      if (c === 0) ctx.moveTo(cc[0] * scale, cc[1] * scale);
+      else ctx.lineTo(cc[0] * scale, cc[1] * scale);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(90,60,30,0.65)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // 格子線（近傍6方向）
+    var qrMap = {};
+    for (var i = 0; i < L.qr.length; i++) qrMap[L.qr[i][0] + ',' + L.qr[i][1]] = i;
+    var dirs = [[1, 0], [0, 1], [-1, 1]];
+    ctx.beginPath();
+    for (i = 0; i < L.qr.length; i++) {
+      var q = L.qr[i][0], r0 = L.qr[i][1];
+      var p1 = res.points[i];
+      for (var d = 0; d < 3; d++) {
+        var ni = qrMap[(q + dirs[d][0]) + ',' + (r0 + dirs[d][1])];
+        if (ni !== undefined) {
+          var p2 = res.points[ni];
+          ctx.moveTo(p1.x * scale, p1.y * scale);
+          ctx.lineTo(p2.x * scale, p2.y * scale);
+        }
+      }
+    }
+    ctx.strokeStyle = 'rgba(90,60,30,0.42)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    var r = L.cell * 0.43 * scale;
+    for (var k = 0; k < res.points.length; k++) {
+      var p = res.points[k];
+      var cls = st.labels[k];
+      var x = p.x * scale, y = p.y * scale;
+      if (cls > 0) {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, 7);
+        ctx.fillStyle = CLASS_COLORS[cls];
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = cls === 1 ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.45)';
+        ctx.stroke();
+      }
+      var isLow = !st.manual[k] && ((p.margin != null ? p.margin : p.conf) < 0.10 || p.conf < 0.42);
+      if (isLow) {
+        ctx.beginPath();
+        ctx.arc(x, y, r * 1.12, 0, 7);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ffb300';
+        ctx.stroke();
+      }
+      if (k === st.hover) {
+        ctx.beginPath();
+        ctx.arc(x, y, r * 1.25, 0, 7);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(80,200,255,0.95)';
+        ctx.stroke();
+      }
+    }
+  }
+
   function renderResult(resetScroll) {
     var res = st.result;
     if (!res) return;
+    syncStep3Controls();
     var cv = $('photoResult');
     var W = res.layout.W;
-    var fit = fitCanvas(cv, W, W, 560, 0.40);
+    var isSplit = st.viewMode === 'split';
+    var fit = fitCanvas(cv, W, W, isSplit ? 320 : 560, isSplit ? 0.36 : 0.40);
     var ctx = cv.getContext('2d');
     ctx.setTransform(fit.dpr, 0, 0, fit.dpr, 0, 0);
     // canonical 画像
@@ -414,34 +534,58 @@
     tmp.width = W; tmp.height = W;
     tmp.getContext('2d').putImageData(id, 0, 0);
     ctx.drawImage(tmp, 0, 0, fit.cssW, fit.cssH);
-    // 石
+
+    // オーバーレイ描画（写真上の実石を隠さないよう、デフォルトは中抜きのカラー枠）
     var scale = fit.cssW / W;
     var r = res.layout.cell * 0.44 * scale;
     for (var k = 0; k < res.points.length; k++) {
       var p = res.points[k];
       var cls = st.labels[k];
       var x = p.x * scale, y = p.y * scale;
-      if (cls > 0) {
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, 7);
-        ctx.fillStyle = CLASS_COLORS[cls];
-        ctx.fill();
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-        ctx.stroke();
-      } else {
-        ctx.beginPath();
-        ctx.arc(x, y, 2, 0, 7);
-        ctx.fillStyle = 'rgba(255,255,255,0.55)';
-        ctx.fill();
+      var isLow = !st.manual[k] && ((p.margin != null ? p.margin : p.conf) < 0.10 || p.conf < 0.42);
+      if (st.viewMode === 'ring') {
+        if (cls > 0) {
+          var ringW = Math.max(2.6, r * 0.34);
+          // 視認性用の薄い外側縁取り（黒石や白石でも盤面と混ざらないように）
+          ctx.beginPath();
+          ctx.arc(x, y, r * 0.96, 0, 7);
+          ctx.lineWidth = ringW + 2;
+          ctx.strokeStyle = cls === 1 ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.65)';
+          ctx.stroke();
+          // 色枠本体（中央は透明のままなので写真の石がそのまま見える）
+          ctx.beginPath();
+          ctx.arc(x, y, r * 0.96, 0, 7);
+          ctx.lineWidth = ringW;
+          ctx.strokeStyle = CLASS_COLORS[cls];
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.arc(x, y, Math.max(1.8, r * 0.15), 0, 7);
+          ctx.fillStyle = 'rgba(255,255,255,0.65)';
+          ctx.fill();
+          ctx.lineWidth = 0.8;
+          ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+          ctx.stroke();
+        }
+        if (st.manual[k]) {
+          ctx.beginPath();
+          ctx.arc(x + r * 0.72, y - r * 0.72, Math.max(2.5, r * 0.22), 0, 7);
+          ctx.fillStyle = '#10b981';
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = '#fff';
+          ctx.stroke();
+        }
       }
-      // 自信が低い点を強調（クラス間の差が小さい点）
-      if ((p.margin != null ? p.margin : p.conf) < 0.10 || p.conf < 0.42) {
+      if (st.viewMode !== 'photo' && isLow) {
+        ctx.save();
+        ctx.setLineDash([4, 3]);
         ctx.beginPath();
-        ctx.arc(x, y, r * 1.12, 0, 7);
-        ctx.lineWidth = 2.5;
+        ctx.arc(x, y, r * 1.18, 0, 7);
+        ctx.lineWidth = 2.2;
         ctx.strokeStyle = '#ffb300';
         ctx.stroke();
+        ctx.restore();
       }
       if (k === st.hover) {
         ctx.beginPath();
@@ -451,6 +595,7 @@
         ctx.stroke();
       }
     }
+    if (isSplit) renderBoardPreview();
     renderCounts();
     renderOutRow();
     renderTurnSelect();
@@ -733,22 +878,57 @@
       }
     }
     st.labels[idx] = next;
+    st.manual[idx] = true;
     renderResult();
   }
 
-  function onResultPointer(e) {
+  function calibrateFromManual() {
+    if (!st.result || !st.labels || !R.reclassifyWithAnchors) return;
+    if (!manualCount()) { toast('先に間違っている石を1〜2個タップして直してください'); return; }
+    var allowed = [0].concat(allowedColors());
+    var out = R.reclassifyWithAnchors(st.result, st.labels, st.manual, allowed);
+    if (!out) return;
+    st.labels = out.labels;
+    for (var i = 0; i < st.result.points.length; i++) {
+      st.result.points[i].cls = out.points[i].cls;
+      st.result.points[i].conf = out.points[i].conf;
+      st.result.points[i].margin = out.points[i].margin;
+    }
+    st.calibrated = true;
+    renderResult();
+    toast(out.changedCount > 0 ? ('色合いを学習して ' + out.changedCount + ' 点を自動調整しました') : '色合いを再確認しました（変更なし）');
+  }
+
+  function resetToInitialRead() {
+    if (!st.result || !st.origLabels) return;
+    st.labels = st.origLabels.slice();
+    for (var i = 0; i < st.result.points.length; i++) {
+      var pt = st.result.points[i];
+      if (pt.origCls != null) { pt.cls = pt.origCls; pt.conf = pt.origConf; pt.margin = pt.origMargin; }
+    }
+    st.manual = {};
+    st.calibrated = false;
+    renderResult();
+    toast('初期判定に戻しました');
+  }
+
+  function pickResultPoint(cv, clientX, clientY) {
     var res = st.result;
-    if (!res) return;
-    var cv = $('photoResult');
+    if (!res || !cv) return -1;
     var rect = cv.getBoundingClientRect();
     var W = res.layout.W;
-    var x = (e.clientX - rect.left) / rect.width * W;
-    var y = (e.clientY - rect.top) / rect.height * W;
+    var x = (clientX - rect.left) / rect.width * W;
+    var y = (clientY - rect.top) / rect.height * W;
     var best = -1, bd = res.layout.cell * 0.55;
     for (var i = 0; i < res.points.length; i++) {
       var d = Math.hypot(res.points[i].x - x, res.points[i].y - y);
       if (d < bd) { bd = d; best = i; }
     }
+    return best;
+  }
+
+  function onResultPointer(e) {
+    var best = pickResultPoint(e.currentTarget, e.clientX, e.clientY);
     if (best < 0) return;
     if (e.type === 'click') { cycleAt(best); snd && snd.click && snd.click(); }
     else { st.hover = best; renderResult(); }
@@ -1015,9 +1195,10 @@
 
   // ---------------- 起動・配線 ----------------
   function reset() {
-    st.result = null; st.labels = null; st.drag = -1; st.hover = -1;
+    st.result = null; st.labels = null; st.origLabels = null; st.drag = -1; st.hover = -1;
     st.corners = null; st.imageData = null; st.img = null; st.fileName = '';
     st.palette = null; st.playerCount = 2; st.allColors = false; st.pickPalette = null; st.outColors = {};
+    st.viewMode = 'ring'; st.manual = {}; st.calibrated = false;
     st.margin = 0.577;
     var ms = $('photoMargin'); if (ms) ms.value = '0.58';
     var ml = $('photoMarginLabel'); if (ml) ml.textContent = '0.58 cell';
@@ -1025,6 +1206,7 @@
     st.autoConf = 0; st.autoMethod = '';
     err('');
     var f = $('photoFile'); if (f) f.value = '';
+    var cam = $('photoCamera'); if (cam) cam.value = '';
   }
 
   function open() {
@@ -1043,14 +1225,9 @@
     var close = $('btnClosePhoto');
     if (close) close.onclick = function () { closeModal($('photoModal')); };
     var file = $('photoFile');
-    if (file) file.onchange = function () { loadImageFile(file.files && file.files[0]); };
-    var sample = $('btnPhotoSample');
-    if (sample) sample.onclick = function () {
-      fetch('./dev/photo/testdata/IMG_0252.jpg').then(function (r) { return r.blob(); }).then(function (b) {
-        var f = new File([b], 'sample.jpg', { type: b.type || 'image/jpeg' });
-        loadImageFile(f);
-      }).catch(function () { err('サンプル画像を読み込めませんでした。'); });
-    };
+    if (file) file.onchange = function () { var f0 = file.files && file.files[0]; file.value = ''; loadImageFile(f0); };
+    var cam = $('photoCamera');
+    if (cam) cam.onchange = function () { var f0 = cam.files && cam.files[0]; cam.value = ''; loadImageFile(f0); };
     var marginInput = $('photoMargin');
     if (marginInput) marginInput.oninput = function () {
       st.margin = Number(marginInput.value);
@@ -1072,24 +1249,26 @@
       cvA.addEventListener('pointerup', onAdjustUp);
       cvA.addEventListener('pointercancel', onAdjustUp);
     }
-    var cvR = $('photoResult');
-    if (cvR) {
+    [$('photoResult'), $('photoBoardPreview')].forEach(function (cvR) {
+      if (!cvR) return;
       cvR.addEventListener('click', onResultPointer);
       cvR.addEventListener('pointermove', function (e) {
-        var res = st.result; if (!res) return;
-        var rect = cvR.getBoundingClientRect();
-        var W = res.layout.W;
-        var x = (e.clientX - rect.left) / rect.width * W;
-        var y = (e.clientY - rect.top) / rect.height * W;
-        var best = -1, bd = res.layout.cell * 0.55;
-        for (var i = 0; i < res.points.length; i++) {
-          var d = Math.hypot(res.points[i].x - x, res.points[i].y - y);
-          if (d < bd) { bd = d; best = i; }
-        }
+        var best = pickResultPoint(cvR, e.clientX, e.clientY);
         if (best !== st.hover) { st.hover = best; renderResult(); }
       });
       cvR.addEventListener('pointerleave', function () { st.hover = -1; renderResult(); });
-    }
+    });
+    [].forEach.call(document.querySelectorAll('#photoViewBtns [data-photo-view]'), function (b) {
+      b.onclick = function () {
+        st.viewMode = b.dataset.photoView || 'ring';
+        if (snd && snd.click) snd.click();
+        renderResult();
+      };
+    });
+    var calBtn = $('btnPhotoCalibrate');
+    if (calBtn) calBtn.onclick = function () { if (snd && snd.click) snd.click(); calibrateFromManual(); };
+    var rstBtn = $('btnPhotoResetRead');
+    if (rstBtn) rstBtn.onclick = function () { if (snd && snd.click) snd.click(); resetToInitialRead(); };
     var pcSel = $('photoPlayerCount');
     if (pcSel) pcSel.onchange = function () {
       setPlayerCount(Number(pcSel.value));
@@ -1173,6 +1352,8 @@
       };
     },
     cycle: function (i) { cycleAt(i); return this.state(); },
+    calibrate: function () { calibrateFromManual(); return this.state(); },
+    setViewMode: function (m) { st.viewMode = m || 'ring'; renderResult(); return this.state(); },
     moveColor: function (i, dir) { movePaletteColor(i, dir); return this.state(); },
     setPalette: function (arr) { commitPaletteOrder(arr); return this.state(); },
     swapColors: function (a, b) { swapPaletteColor(a, b); return this.state(); },
